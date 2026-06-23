@@ -104,6 +104,19 @@ if ($autoTable.Contains('Property') -or $autoTable.Contains('data')) {
     throw 'Auto view failed. Envelope data rendered as a nested property table.'
 }
 
+$wideSdJson = '{"ok":true,"command":"opened","data":[{"kind":"changelist","cl":"default","description":"<created by soda. use sd change to add description>","fileCount":16},{"kind":"file","cl":"default","path":"test/e2e/scenarios/config.test.ts","rev":"head","action":"edit","type":"text"},{"kind":"file","cl":"default","path":"src/config/resolver.ts","rev":"head","action":"edit","type":"text"}]}'
+$wideSdEnvelope = ConvertFrom-Json -InputObject $wideSdJson -Depth 100 -NoEnumerate
+$narrowAutoTable = script:ConvertTo-HumanizerAutoTable -Value $wideSdEnvelope -ExpandDepth 2 -MaxWidth 100
+foreach ($line in $narrowAutoTable) {
+    if ($line.Length -gt 100) {
+        throw "Auto view failed. Expected width-limited line, got $($line.Length): $line"
+    }
+}
+
+if (-not (($narrowAutoTable -join "`n").Contains('...'))) {
+    throw 'Auto view failed. Wide table did not truncate any cell.'
+}
+
 New-Humanizer __humanizer_test__ (Get-Command pwsh).Source
 
 Assert-ParameterDefault -FunctionName 'New-Humanizer' -ParameterName 'View' -Expected 'Auto'

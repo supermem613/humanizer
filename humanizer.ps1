@@ -174,11 +174,13 @@ function script:ConvertTo-HumanizerAutoTable {
         [Parameter(Mandatory)]
         [object]$Value,
 
-        [int]$ExpandDepth = 2
+        [int]$ExpandDepth = 2,
+
+        [int]$MaxWidth = 0
     )
 
     if (-not (script:Test-HumanizerEnvelope $Value)) {
-        return script:ConvertTo-HumanizerTable -Value $Value -ExpandDepth $ExpandDepth
+        return script:ConvertTo-HumanizerTable -Value $Value -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth
     }
 
     $lines = @()
@@ -194,7 +196,7 @@ function script:ConvertTo-HumanizerAutoTable {
         $lines += ''
     }
 
-    $lines += script:ConvertTo-HumanizerTable -Value $Value.PSObject.Properties['data'].Value -ExpandDepth $ExpandDepth
+    $lines += script:ConvertTo-HumanizerTable -Value $Value.PSObject.Properties['data'].Value -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth
     return $lines
 }
 
@@ -222,6 +224,69 @@ function script:Get-HumanizerValueWidth {
     }
 
     return $width
+}
+
+function script:Get-HumanizerTableWidth {
+    param([int[]]$Widths)
+
+    $sum = 0
+    foreach ($width in $Widths) {
+        $sum += $width
+    }
+
+    return $sum + (3 * $Widths.Count) + 1
+}
+
+function script:Limit-HumanizerTableWidths {
+    param(
+        [int[]]$Widths,
+        [int[]]$MinimumWidths,
+        [int]$MaxWidth
+    )
+
+    if ($MaxWidth -le 0) {
+        return $Widths
+    }
+
+    $limited = @($Widths)
+    while ((script:Get-HumanizerTableWidth $limited) -gt $MaxWidth) {
+        $largestIndex = -1
+        $largestWidth = -1
+        $index = 0
+        while ($index -lt $limited.Count) {
+            if ($limited[$index] -gt $MinimumWidths[$index] -and $limited[$index] -gt $largestWidth) {
+                $largestIndex = $index
+                $largestWidth = $limited[$index]
+            }
+
+            $index++
+        }
+
+        if ($largestIndex -lt 0) {
+            break
+        }
+
+        $limited[$largestIndex]--
+    }
+
+    return $limited
+}
+
+function script:Limit-HumanizerCellLine {
+    param(
+        [string]$Value,
+        [int]$Width
+    )
+
+    if ($Value.Length -le $Width) {
+        return $Value
+    }
+
+    if ($Width -le 3) {
+        return $Value.Substring(0, $Width)
+    }
+
+    return $Value.Substring(0, $Width - 3) + '...'
 }
 
 function script:New-HumanizerBorder {
@@ -268,6 +333,7 @@ function script:New-HumanizerTableRow {
                 $line = $splitCells[$columnIndex][$lineIndex]
             }
 
+            $line = script:Limit-HumanizerCellLine -Value $line -Width $Widths[$columnIndex]
             $parts += ' ' + $line.PadRight($Widths[$columnIndex]) + ' '
             $columnIndex++
         }
@@ -282,12 +348,15 @@ function script:New-HumanizerTableRow {
 function script:Format-HumanizerBoxTable {
     param(
         [string[]]$Headers,
-        [object[]]$Rows
+        [object[]]$Rows,
+        [int]$MaxWidth = 0
     )
 
     $widths = @()
+    $minimumWidths = @()
     $columnIndex = 0
     while ($columnIndex -lt $Headers.Count) {
+        $minimumWidth = [Math]::Min((script:Get-HumanizerValueWidth $Headers[$columnIndex]), 12)
         $width = script:Get-HumanizerValueWidth $Headers[$columnIndex]
         foreach ($row in $Rows) {
             $cellWidth = script:Get-HumanizerValueWidth ([string]$row[$columnIndex])
@@ -297,8 +366,11 @@ function script:Format-HumanizerBoxTable {
         }
 
         $widths += $width
+        $minimumWidths += $minimumWidth
         $columnIndex++
     }
+
+    $widths = script:Limit-HumanizerTableWidths -Widths $widths -MinimumWidths $minimumWidths -MaxWidth $MaxWidth
 
     $output = @()
     $output += script:New-HumanizerBorder '┌' '┬' '┐' $widths
@@ -316,7 +388,8 @@ function script:ConvertTo-HumanizerRecordTable {
     param(
         [object]$Value,
         [int]$Depth,
-        [int]$ExpandDepth
+        [int]$ExpandDepth,
+        [int]$MaxWidth = 0
     )
 
     $rows = @()
@@ -327,19 +400,20 @@ function script:ConvertTo-HumanizerRecordTable {
         )
     }
 
-    return script:Format-HumanizerBoxTable -Headers @('Property', 'Value') -Rows $rows
+    return script:Format-HumanizerBoxTable -Headers @('Property', 'Value') -Rows $rows -MaxWidth $MaxWidth
 }
 
 function script:ConvertTo-HumanizerListTable {
     param(
         [object]$Value,
         [int]$Depth,
-        [int]$ExpandDepth
+        [int]$ExpandDepth,
+        [int]$MaxWidth = 0
     )
 
     $items = script:Get-HumanizerListItems $Value
     if ($items.Count -eq 0) {
-        return script:Format-HumanizerBoxTable -Headers @('#', 'Value') -Rows @()
+        return script:Format-HumanizerBoxTable -Headers @('#', 'Value') -Rows @() -MaxWidth $MaxWidth
     }
 
     $allRecords = $true
@@ -361,7 +435,7 @@ function script:ConvertTo-HumanizerListTable {
             $index++
         }
 
-        return script:Format-HumanizerBoxTable -Headers @('#', 'Value') -Rows $rows
+        return script:Format-HumanizerBoxTable -Headers @('#', 'Value') -Rows $rows -MaxWidth $MaxWidth
     }
 
     $columns = @()
@@ -391,7 +465,7 @@ function script:ConvertTo-HumanizerListTable {
         $index++
     }
 
-    return script:Format-HumanizerBoxTable -Headers $headers -Rows $rows
+    return script:Format-HumanizerBoxTable -Headers $headers -Rows $rows -MaxWidth $MaxWidth
 }
 
 function script:ConvertTo-HumanizerTable {
@@ -401,15 +475,17 @@ function script:ConvertTo-HumanizerTable {
 
         [int]$Depth = 0,
 
-        [int]$ExpandDepth = 2
+        [int]$ExpandDepth = 2,
+
+        [int]$MaxWidth = 0
     )
 
     if (script:Test-HumanizerRecord $Value) {
-        return script:ConvertTo-HumanizerRecordTable -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth
+        return script:ConvertTo-HumanizerRecordTable -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth
     }
 
     if (script:Test-HumanizerList $Value) {
-        return script:ConvertTo-HumanizerListTable -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth
+        return script:ConvertTo-HumanizerListTable -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth
     }
 
     return @(script:ConvertTo-HumanizerScalar $Value)
@@ -497,12 +573,13 @@ function Format-HumanizerJson {
                 }
             }
 
+            $maxWidth = [Math]::Max(40, [Console]::WindowWidth - 1)
             if ($View -eq 'Auto' -and $resolvedView -eq 'Table') {
-                foreach ($line in (script:ConvertTo-HumanizerAutoTable -Value $obj -ExpandDepth $ExpandDepth)) {
+                foreach ($line in (script:ConvertTo-HumanizerAutoTable -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth)) {
                     Write-Host $line
                 }
             } elseif ($resolvedView -eq 'Table') {
-                foreach ($line in (script:ConvertTo-HumanizerTable -Value $obj -ExpandDepth $ExpandDepth)) {
+                foreach ($line in (script:ConvertTo-HumanizerTable -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth)) {
                     Write-Host $line
                 }
             } else {

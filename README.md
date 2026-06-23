@@ -140,7 +140,7 @@ sd opened > opened.json
 | View | Behavior |
 |---|---|
 | `Auto` | Default. Uses `Table` for records and arrays, otherwise uses `PrettyJson` |
-| `Table` | Renders records and arrays as boxed tables, including nested tables up to `-ExpandDepth` |
+| `Table` | Renders records and arrays as boxed tables, including nested tables up to `-ExpandDepth`, then truncates wide cells to fit the terminal |
 | `PrettyJson` | Re-indents JSON and colorizes keys, strings, numbers, booleans, null, and structural characters |
 | `Raw` | Always writes the original output |
 
