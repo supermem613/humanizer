@@ -12,17 +12,17 @@
 #
 # After that, just run the command normally:
 #
-#   kubectl get pods -o json      # → colorized pretty JSON in the terminal
-#   kubectl get pods -o json | jq # → raw JSON, perfect for agents / pipes
-#   kubectl get pods -o json > out.json  # → raw JSON written to file
+#   kubectl get pods -o json      # colorized pretty JSON in the terminal
+#   kubectl get pods -o json | jq # raw JSON for agents and pipes
+#   kubectl get pods -o json > out.json  # raw JSON written to file
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 # Maximum size for the validation parse in Test-IsJson.
-# Above this threshold the structural check (leading { or [) is sufficient;
-# the actual parse cost is deferred to ConvertTo-ColorJson which runs once.
+# Above this threshold the structural check (leading { or [) is sufficient.
+# The actual parse cost is deferred to ConvertTo-ColorJson, which runs once.
 $script:MaxValidationParseSize = 1MB
 
 function script:ConvertTo-ColorJson {
@@ -43,17 +43,17 @@ function script:ConvertTo-ColorJson {
 
     # Regex matching JSON primitive values: booleans, null, and numbers.
     # Group 1: keyword (true|false|null) or full number literal.
-    #   Groups 2-3: internal sub-captures for decimal and exponent parts
-    #               (not referenced directly; required by the regex engine).
+    #   Groups 2-3: internal sub-captures for decimal and exponent parts.
+    #               The regex engine requires them, but the code does not reference them directly.
     # Group 4: optional trailing whitespace before the terminator.
-    # Group 5: JSON terminator — comma, closing bracket/brace, or end-of-string.
+    # Group 5: JSON terminator, comma, closing bracket or brace, or end-of-string.
     $primitivePattern = '^(true|false|null|-?\d+(\.\d+)?([eE][+-]?\d+)?)(\s*)(,|\]|}|$)'
 
     foreach ($line in $lines) {
-        # Key  →  DarkYellow
-        # String value  →  Green
-        # Number / bool / null  →  Cyan
-        # Structural characters  →  Gray
+        # Key: DarkYellow
+        # String value: Green
+        # Number, bool, or null: Cyan
+        # Structural characters: Gray
 
         if ($line -match '^(\s*)"([^"]+)"(\s*:\s*)(.*)$') {
             $indent = $Matches[1]
@@ -83,8 +83,8 @@ function script:Test-IsJson {
     .SYNOPSIS
         Returns $true when the string (after trimming) starts with { or [.
         Performs a full parse only when the quick check passes and the document
-        is small enough that the cost is negligible (parsing is skipped for very
-        large strings; the caller will parse once anyway if this returns true).
+        is small enough that the cost is negligible. Parsing is skipped for very
+        large strings because the caller will parse once anyway if this returns true.
     #>
     param([string]$Text)
 
@@ -93,7 +93,7 @@ function script:Test-IsJson {
         return $false
     }
 
-    # For very large payloads skip the validation parse — the structural check
+    # For very large payloads skip the validation parse. The structural check
     # above is sufficient, and ConvertTo-ColorJson will parse the document once
     # anyway. Real JSON errors will be caught in the caller's try/catch.
     if ($trimmed.Length -gt $script:MaxValidationParseSize) {
@@ -186,11 +186,13 @@ function New-Humanizer {
     # Capture the resolved path in a local variable so the scriptblock closes
     # over it correctly even when New-Humanizer is called multiple times.
     $resolvedPath = $Path
+    $formatter = ${function:Format-HumanizerJson}
 
     $funcBody = {
-        # Only stdout is captured; stderr flows through to the caller's error
+        # Only stdout is captured. stderr flows through to the caller's error
         # stream naturally, keeping error messages separate from JSON output.
-        $raw = & $resolvedPath @args; $exitCode = $LASTEXITCODE
+        $raw = & $resolvedPath @args
+        $exitCode = $LASTEXITCODE
 
         # Guard against null / empty output (e.g. command produced no stdout).
         # The array check is needed because PowerShell may return an empty
@@ -207,7 +209,7 @@ function New-Humanizer {
         $normalized = $joined -replace "`r`n?", "`n"
         $text      = $normalized.TrimEnd()
 
-        Format-HumanizerJson $text
+        & $formatter $text
 
         # Propagate the original exit code so callers can detect failures.
         $global:LASTEXITCODE = $exitCode

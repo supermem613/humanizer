@@ -1,6 +1,6 @@
 # humanizer
 
-A drop-in PowerShell helper that automatically pretty-prints and colorizes JSON output from any CLI — with **zero flags, zero pipes, and zero changes to your tools**.
+A drop-in PowerShell helper that automatically pretty-prints and colorizes JSON output from any CLI without flags, pipes, or changes to the wrapped tool.
 
 When stdout is connected to your terminal, JSON is rendered in color.
 When you pipe or redirect output, raw JSON passes through untouched so agents and scripts never break.
@@ -19,7 +19,7 @@ Save it anywhere, for example `$HOME\tools\humanizer.ps1`.
 . "$HOME\tools\humanizer.ps1"
 ```
 
-### 3. Wrap the CLIs you care about (once, in your profile)
+### 3. Wrap the CLIs you care about once in your profile
 
 ```powershell
 New-Humanizer kubectl   "C:\tools\kubectl.exe"
@@ -34,24 +34,24 @@ New-Humanizer kubectl
 New-Humanizer gh
 ```
 
-That's it. **Restart your terminal** (or re-source your profile) and every call to those commands is automatically humanized.
+Restart your terminal, or re-source your profile. Every call to those commands is automatically humanized.
 
 ---
 
 ## Usage
 
 ```powershell
-# Terminal → colorized, pretty-printed JSON
+# Terminal: colorized, pretty-printed JSON
 kubectl get pods -o json
 
-# Pipe → raw JSON (agents / jq / scripts work perfectly)
+# Pipe: raw JSON for agents, jq, and scripts
 kubectl get pods -o json | jq '.items[].metadata.name'
 
-# Redirect → raw JSON written to file
+# Redirect: raw JSON written to file
 kubectl get pods -o json > pods.json
 ```
 
-No flags. No extra pipes. No changes to the underlying tool.
+No flags, extra pipes, or changes to the underlying tool.
 
 ---
 
@@ -60,8 +60,8 @@ No flags. No extra pipes. No changes to the underlying tool.
 | Scenario | What happens |
 |---|---|
 | Running in a terminal | JSON is detected, re-indented, and colorized with `Write-Host` |
-| Output piped to another process | `[Console]::IsOutputRedirected` is `true` → raw `Write-Output` |
-| Output redirected to a file | Same as above → raw `Write-Output` |
+| Output piped to another process | `[Console]::IsOutputRedirected` is `true`, so output stays raw through `Write-Output` |
+| Output redirected to a file | Output stays raw through `Write-Output` |
 | Output is not valid JSON | Raw `Write-Output` regardless of destination |
 
 ### Color scheme
@@ -70,7 +70,7 @@ No flags. No extra pipes. No changes to the underlying tool.
 |---|---|
 | Keys | DarkYellow |
 | String values | Green |
-| Numbers / booleans / null | Cyan |
+| Numbers, booleans, and null | Cyan |
 | Structural characters | Gray |
 
 ---
@@ -101,3 +101,19 @@ New-Humanizer [-Name] <string> [[-Path] <string>]
 |---|---|---|
 | `Name` | Yes | Name of the wrapper function to create (e.g. `"kubectl"`) |
 | `Path` | No | Full path to the executable. Resolved via `Get-Command` if omitted. |
+
+---
+
+## Tests
+
+Run the repeatable smoke tests from the repository root:
+
+```powershell
+.\test\run.ps1
+```
+
+The tests verify raw redirected output, wrapper registration, and exit-code propagation.
+
+## License
+
+MIT. See `LICENSE`.
