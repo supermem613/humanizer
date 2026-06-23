@@ -36,6 +36,14 @@ New-Humanizer gh
 
 Restart your terminal, or re-source your profile. Every call to those commands is automatically humanized.
 
+You can also choose a view per wrapper:
+
+```powershell
+New-Humanizer gh
+New-Humanizer kubectl
+New-Humanizer az -View Table -ExpandDepth 2
+```
+
 ---
 
 ## Usage
@@ -44,8 +52,8 @@ Restart your terminal, or re-source your profile. Every call to those commands i
 # Terminal: colorized, pretty-printed JSON
 kubectl get pods -o json
 
-# Pipe: raw JSON for agents, jq, and scripts
-kubectl get pods -o json | jq '.items[].metadata.name'
+# Pipe: raw JSON for agents and scripts
+kubectl get pods -o json | other-tool
 
 # Redirect: raw JSON written to file
 kubectl get pods -o json > pods.json
@@ -55,23 +63,86 @@ No flags, extra pipes, or changes to the underlying tool.
 
 ---
 
+## Examples
+
+### Default `Auto` view
+
+`Auto` renders structured JSON as tables when stdout is connected to a terminal.
+
+```powershell
+sd opened
+```
+
+For common CLI envelopes such as `{ "ok": true, "command": "opened", "data": [...] }`, scalar metadata stays compact and `data` becomes the primary table:
+
+```text
+ok: true
+command: opened
+
+┌───┬────────────┬─────────┬───────────────────┬───────────┬───────────┬──────┬────────┬──────┐
+│ # │ kind       │ cl      │ description       │ fileCount │ path      │ rev  │ action │ type │
+├───┼────────────┼─────────┼───────────────────┼───────────┼───────────┼──────┼────────┼──────┤
+│ 0 │ changelist │ default │ <created by soda> │ 3         │           │      │        │      │
+│ 1 │ file       │ default │                   │           │ README.md │ head │ edit   │ text │
+└───┴────────────┴─────────┴───────────────────┴───────────┴───────────┴──────┴────────┴──────┘
+```
+
+### Nested tables
+
+Nested records and arrays render inside their parent cells until `-ExpandDepth` is reached.
+
+```powershell
+New-Humanizer forge -View Auto -ExpandDepth 2
+```
+
+Use a lower depth when nested values are too wide for the terminal:
+
+```powershell
+New-Humanizer forge -View Auto -ExpandDepth 0
+```
+
+### Pretty JSON
+
+Use `PrettyJson` when the original JSON shape matters more than table browsing.
+
+```powershell
+New-Humanizer gh -View PrettyJson
+```
+
+### Raw output
+
+Use `Raw` when a command should never render terminal output.
+
+```powershell
+New-Humanizer rotunda -View Raw
+```
+
+Pipes and redirects are always raw, regardless of view:
+
+```powershell
+sd opened | other-tool
+sd opened > opened.json
+```
+
+---
+
 ## How it works
 
 | Scenario | What happens |
 |---|---|
-| Running in a terminal | JSON is detected, re-indented, and colorized with `Write-Host` |
+| Running in a terminal | JSON is detected and rendered with the configured view |
 | Output piped to another process | `[Console]::IsOutputRedirected` is `true`, so output stays raw through `Write-Output` |
 | Output redirected to a file | Output stays raw through `Write-Output` |
 | Output is not valid JSON | Raw `Write-Output` regardless of destination |
 
-### Color scheme
+### Views
 
-| Element | Color |
+| View | Behavior |
 |---|---|
-| Keys | DarkYellow |
-| String values | Green |
-| Numbers, booleans, and null | Cyan |
-| Structural characters | Gray |
+| `Auto` | Default. Uses `Table` for records and arrays, otherwise uses `PrettyJson` |
+| `Table` | Renders records and arrays as boxed tables, including nested tables up to `-ExpandDepth` |
+| `PrettyJson` | Re-indents JSON and colorizes keys, strings, numbers, booleans, null, and structural characters |
+| `Raw` | Always writes the original output |
 
 ---
 
@@ -79,14 +150,15 @@ No flags, extra pipes, or changes to the underlying tool.
 
 ### `Format-HumanizerJson`
 
-Pretty-prints a JSON string (or passes it through raw) according to the rules above.
+Pretty-prints or table-renders a JSON string according to the rules above.
 
 ```powershell
 $raw = & "C:\tools\agentdoor.exe" run
 Format-HumanizerJson $raw
+Format-HumanizerJson $raw -View Auto -ExpandDepth 2
 
 # Also accepts pipeline input
-& "C:\tools\agentdoor.exe" run | Format-HumanizerJson
+& "C:\tools\agentdoor.exe" run | Format-HumanizerJson -View Table
 ```
 
 ### `New-Humanizer`
@@ -94,13 +166,15 @@ Format-HumanizerJson $raw
 Creates a global wrapper function for any executable.
 
 ```powershell
-New-Humanizer [-Name] <string> [[-Path] <string>]
+New-Humanizer [-Name] <string> [[-Path] <string>] [-View <Raw|PrettyJson|Table|Auto>] [-ExpandDepth <int>]
 ```
 
 | Parameter | Required | Description |
 |---|---|---|
 | `Name` | Yes | Name of the wrapper function to create (e.g. `"kubectl"`) |
 | `Path` | No | Full path to the executable. Resolved via `Get-Command` if omitted. |
+| `View` | No | Rendering mode for terminal output. Defaults to `Auto`. |
+| `ExpandDepth` | No | Maximum nested table depth for `Table` and `Auto`. Defaults to `2`. |
 
 ---
 
@@ -112,7 +186,7 @@ Run the repeatable smoke tests from the repository root:
 .\test\run.ps1
 ```
 
-The tests verify raw redirected output, wrapper registration, and exit-code propagation.
+The tests verify raw redirected output, table rendering, wrapper registration, view configuration, and exit-code propagation.
 
 ## License
 

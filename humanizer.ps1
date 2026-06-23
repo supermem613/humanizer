@@ -78,6 +78,343 @@ function script:ConvertTo-ColorJson {
     }
 }
 
+function script:Test-HumanizerRecord {
+    param([object]$Value)
+
+    if ($null -eq $Value -or $Value -is [System.Array]) {
+        return $false
+    }
+
+    return ($Value -is [pscustomobject])
+}
+
+function script:Test-HumanizerList {
+    param([object]$Value)
+
+    if ($null -eq $Value -or $Value -is [string]) {
+        return $false
+    }
+
+    return ($Value -is [System.Collections.IEnumerable])
+}
+
+function script:ConvertTo-HumanizerScalar {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return 'null'
+    }
+
+    if ($Value -is [bool]) {
+        return $Value.ToString().ToLowerInvariant()
+    }
+
+    if ($Value -is [string]) {
+        return $Value
+    }
+
+    return [string]$Value
+}
+
+function script:Test-HumanizerScalar {
+    param([object]$Value)
+
+    return (-not (script:Test-HumanizerRecord $Value) -and -not (script:Test-HumanizerList $Value))
+}
+
+function script:ConvertTo-HumanizerCell {
+    param(
+        [object]$Value,
+        [int]$Depth,
+        [int]$ExpandDepth
+    )
+
+    if ((script:Test-HumanizerRecord $Value) -or (script:Test-HumanizerList $Value)) {
+        if ($Depth -ge $ExpandDepth) {
+            return ($Value | ConvertTo-Json -Depth 100 -Compress)
+        }
+
+        return (script:ConvertTo-HumanizerTable -Value $Value -Depth ($Depth + 1) -ExpandDepth $ExpandDepth) -join "`n"
+    }
+
+    return script:ConvertTo-HumanizerScalar $Value
+}
+
+function script:Test-HumanizerEnvelope {
+    param([object]$Value)
+
+    if (-not (script:Test-HumanizerRecord $Value)) {
+        return $false
+    }
+
+    $dataProperty = $Value.PSObject.Properties['data']
+    if (-not $dataProperty) {
+        return $false
+    }
+
+    if (script:Test-HumanizerScalar $dataProperty.Value) {
+        return $false
+    }
+
+    foreach ($property in $Value.PSObject.Properties) {
+        if ($property.Name -eq 'data') {
+            continue
+        }
+
+        if (-not (script:Test-HumanizerScalar $property.Value)) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function script:ConvertTo-HumanizerAutoTable {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Value,
+
+        [int]$ExpandDepth = 2
+    )
+
+    if (-not (script:Test-HumanizerEnvelope $Value)) {
+        return script:ConvertTo-HumanizerTable -Value $Value -ExpandDepth $ExpandDepth
+    }
+
+    $lines = @()
+    foreach ($property in $Value.PSObject.Properties) {
+        if ($property.Name -eq 'data') {
+            continue
+        }
+
+        $lines += "$($property.Name): $(script:ConvertTo-HumanizerScalar $property.Value)"
+    }
+
+    if ($lines.Count -gt 0) {
+        $lines += ''
+    }
+
+    $lines += script:ConvertTo-HumanizerTable -Value $Value.PSObject.Properties['data'].Value -ExpandDepth $ExpandDepth
+    return $lines
+}
+
+function script:Get-HumanizerListItems {
+    param([object]$Value)
+
+    return @($Value)
+}
+
+function script:Get-HumanizerRecordNames {
+    param([object]$Value)
+
+    return @($Value.PSObject.Properties | ForEach-Object { $_.Name })
+}
+
+function script:Get-HumanizerValueWidth {
+    param([string]$Value)
+
+    $lines = $Value -split "`n"
+    $width = 0
+    foreach ($line in $lines) {
+        if ($line.Length -gt $width) {
+            $width = $line.Length
+        }
+    }
+
+    return $width
+}
+
+function script:New-HumanizerBorder {
+    param(
+        [string]$Left,
+        [string]$Middle,
+        [string]$Right,
+        [int[]]$Widths
+    )
+
+    $parts = foreach ($width in $Widths) {
+        '─' * ($width + 2)
+    }
+
+    return $Left + ($parts -join $Middle) + $Right
+}
+
+function script:New-HumanizerTableRow {
+    param(
+        [string[]]$Cells,
+        [int[]]$Widths
+    )
+
+    $splitCells = @()
+    foreach ($cell in $Cells) {
+        $splitCells += ,@(([string]$cell) -split "`n")
+    }
+
+    $height = 1
+    foreach ($cellLines in $splitCells) {
+        if ($cellLines.Count -gt $height) {
+            $height = $cellLines.Count
+        }
+    }
+
+    $rows = @()
+    $lineIndex = 0
+    while ($lineIndex -lt $height) {
+        $parts = @()
+        $columnIndex = 0
+        while ($columnIndex -lt $Cells.Count) {
+            $line = ''
+            if ($lineIndex -lt $splitCells[$columnIndex].Count) {
+                $line = $splitCells[$columnIndex][$lineIndex]
+            }
+
+            $parts += ' ' + $line.PadRight($Widths[$columnIndex]) + ' '
+            $columnIndex++
+        }
+
+        $rows += '│' + ($parts -join '│') + '│'
+        $lineIndex++
+    }
+
+    return $rows
+}
+
+function script:Format-HumanizerBoxTable {
+    param(
+        [string[]]$Headers,
+        [object[]]$Rows
+    )
+
+    $widths = @()
+    $columnIndex = 0
+    while ($columnIndex -lt $Headers.Count) {
+        $width = script:Get-HumanizerValueWidth $Headers[$columnIndex]
+        foreach ($row in $Rows) {
+            $cellWidth = script:Get-HumanizerValueWidth ([string]$row[$columnIndex])
+            if ($cellWidth -gt $width) {
+                $width = $cellWidth
+            }
+        }
+
+        $widths += $width
+        $columnIndex++
+    }
+
+    $output = @()
+    $output += script:New-HumanizerBorder '┌' '┬' '┐' $widths
+    $output += script:New-HumanizerTableRow $Headers $widths
+    $output += script:New-HumanizerBorder '├' '┼' '┤' $widths
+    foreach ($row in $Rows) {
+        $output += script:New-HumanizerTableRow ([string[]]$row) $widths
+    }
+
+    $output += script:New-HumanizerBorder '└' '┴' '┘' $widths
+    return $output
+}
+
+function script:ConvertTo-HumanizerRecordTable {
+    param(
+        [object]$Value,
+        [int]$Depth,
+        [int]$ExpandDepth
+    )
+
+    $rows = @()
+    foreach ($property in $Value.PSObject.Properties) {
+        $rows += ,@(
+            $property.Name,
+            (script:ConvertTo-HumanizerCell -Value $property.Value -Depth $Depth -ExpandDepth $ExpandDepth)
+        )
+    }
+
+    return script:Format-HumanizerBoxTable -Headers @('Property', 'Value') -Rows $rows
+}
+
+function script:ConvertTo-HumanizerListTable {
+    param(
+        [object]$Value,
+        [int]$Depth,
+        [int]$ExpandDepth
+    )
+
+    $items = script:Get-HumanizerListItems $Value
+    if ($items.Count -eq 0) {
+        return script:Format-HumanizerBoxTable -Headers @('#', 'Value') -Rows @()
+    }
+
+    $allRecords = $true
+    foreach ($item in $items) {
+        if (-not (script:Test-HumanizerRecord $item)) {
+            $allRecords = $false
+            break
+        }
+    }
+
+    if (-not $allRecords) {
+        $rows = @()
+        $index = 0
+        while ($index -lt $items.Count) {
+            $rows += ,@(
+                [string]$index,
+                (script:ConvertTo-HumanizerCell -Value $items[$index] -Depth $Depth -ExpandDepth $ExpandDepth)
+            )
+            $index++
+        }
+
+        return script:Format-HumanizerBoxTable -Headers @('#', 'Value') -Rows $rows
+    }
+
+    $columns = @()
+    foreach ($item in $items) {
+        foreach ($name in (script:Get-HumanizerRecordNames $item)) {
+            if ($columns -notcontains $name) {
+                $columns += $name
+            }
+        }
+    }
+
+    $headers = @('#') + $columns
+    $rows = @()
+    $index = 0
+    while ($index -lt $items.Count) {
+        $row = @([string]$index)
+        foreach ($column in $columns) {
+            $property = $items[$index].PSObject.Properties[$column]
+            if ($property) {
+                $row += script:ConvertTo-HumanizerCell -Value $property.Value -Depth $Depth -ExpandDepth $ExpandDepth
+            } else {
+                $row += ''
+            }
+        }
+
+        $rows += ,$row
+        $index++
+    }
+
+    return script:Format-HumanizerBoxTable -Headers $headers -Rows $rows
+}
+
+function script:ConvertTo-HumanizerTable {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Value,
+
+        [int]$Depth = 0,
+
+        [int]$ExpandDepth = 2
+    )
+
+    if (script:Test-HumanizerRecord $Value) {
+        return script:ConvertTo-HumanizerRecordTable -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth
+    }
+
+    if (script:Test-HumanizerList $Value) {
+        return script:ConvertTo-HumanizerListTable -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth
+    }
+
+    return @(script:ConvertTo-HumanizerScalar $Value)
+}
+
 function script:Test-IsJson {
     <#
     .SYNOPSIS
@@ -134,15 +471,47 @@ function Format-HumanizerJson {
     #>
     param(
         [Parameter(Mandatory, ValueFromPipeline)]
-        [string]$InputString
+        [string]$InputString,
+
+        [ValidateSet('Raw', 'PrettyJson', 'Table', 'Auto')]
+        [string]$View = 'Auto',
+
+        [ValidateRange(0, 10)]
+        [int]$ExpandDepth = 2
     )
+
+    if ($View -eq 'Raw') {
+        Write-Output $InputString
+        return
+    }
 
     if ((script:Test-IsTerminal) -and (script:Test-IsJson $InputString)) {
         try {
-            script:ConvertTo-ColorJson $InputString
+            $obj = ConvertFrom-Json -InputObject $InputString -Depth 100 -NoEnumerate -ErrorAction Stop
+            $resolvedView = $View
+            if ($View -eq 'Auto') {
+                if ((script:Test-HumanizerRecord $obj) -or (script:Test-HumanizerList $obj)) {
+                    $resolvedView = 'Table'
+                } else {
+                    $resolvedView = 'PrettyJson'
+                }
+            }
+
+            if ($View -eq 'Auto' -and $resolvedView -eq 'Table') {
+                foreach ($line in (script:ConvertTo-HumanizerAutoTable -Value $obj -ExpandDepth $ExpandDepth)) {
+                    Write-Host $line
+                }
+            } elseif ($resolvedView -eq 'Table') {
+                foreach ($line in (script:ConvertTo-HumanizerTable -Value $obj -ExpandDepth $ExpandDepth)) {
+                    Write-Host $line
+                }
+            } else {
+                script:ConvertTo-ColorJson $InputString
+            }
+
             return
         } catch {
-            # Parsing failed (e.g. truncated output) – fall through to raw output
+            # Parsing failed, so the original output remains the safest result.
         }
     }
 
@@ -172,7 +541,13 @@ function New-Humanizer {
         [Parameter(Mandatory)]
         [string]$Name,
 
-        [string]$Path
+        [string]$Path,
+
+        [ValidateSet('Raw', 'PrettyJson', 'Table', 'Auto')]
+        [string]$View = 'Auto',
+
+        [ValidateRange(0, 10)]
+        [int]$ExpandDepth = 2
     )
 
     if (-not $Path) {
@@ -187,6 +562,8 @@ function New-Humanizer {
     # over it correctly even when New-Humanizer is called multiple times.
     $resolvedPath = $Path
     $formatter = ${function:Format-HumanizerJson}
+    $viewName = $View
+    $viewExpandDepth = $ExpandDepth
 
     $funcBody = {
         # Only stdout is captured. stderr flows through to the caller's error
@@ -209,7 +586,7 @@ function New-Humanizer {
         $normalized = $joined -replace "`r`n?", "`n"
         $text      = $normalized.TrimEnd()
 
-        & $formatter $text
+        & $formatter $text -View $viewName -ExpandDepth $viewExpandDepth
 
         # Propagate the original exit code so callers can detect failures.
         $global:LASTEXITCODE = $exitCode
@@ -217,5 +594,5 @@ function New-Humanizer {
 
     # Register the function in the caller's (global) scope
     Set-Item -Path "function:global:$Name" -Value $funcBody
-    Write-Verbose "humanizer: '$Name' → '$resolvedPath'"
+    Write-Verbose "humanizer: '$Name' -> '$resolvedPath'"
 }
