@@ -329,6 +329,37 @@ Set-HumanizerView -Name __humanizer_auto_test__ -View Auto -ExpandDepth 2 | Out-
 $pipelineChanged = & __humanizer_auto_test__ -NoProfile -Command "'{`"ok`":true}'" | To-HumanizerView Raw
 Assert-Equal -Actual ($pipelineChanged -join "`n") -Expected '{"ok":true}' -Name 'Wrapped command piped to To-HumanizerView Raw preserves raw JSON'
 
+New-Humanizer __humanizer_raw_native_test__ (Get-Command pwsh).Source -View Raw
+$rawNativeFile = Join-Path $repo '.humanizer-raw-native-output.tmp'
+try {
+    $nativeBytesScript = '$bytes = [System.Text.Encoding]::UTF8.GetBytes("plain"); [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)'
+    & __humanizer_raw_native_test__ -NoProfile -Command $nativeBytesScript > $rawNativeFile
+    $rawNativeBytes = [System.IO.File]::ReadAllBytes($rawNativeFile)
+    $expectedNativeBytes = [System.Text.Encoding]::UTF8.GetBytes('plain')
+    Assert-Equal -Actual ($rawNativeBytes -join ',') -Expected ($expectedNativeBytes -join ',') -Name 'New-Humanizer Raw view preserves native stdout bytes'
+} finally {
+    Remove-Item $rawNativeFile -ErrorAction SilentlyContinue
+    Remove-Item Alias:\__humanizer_raw_native_test__ -Force -ErrorAction SilentlyContinue
+    Remove-Item function:global:__humanizer_raw_native_test__ -ErrorAction SilentlyContinue
+}
+
+$oldConsoleOutputEncoding = [Console]::OutputEncoding
+$utf8RawFile = Join-Path $repo '.humanizer-utf8-raw-output.tmp'
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(437)
+    New-Humanizer __humanizer_utf8_test__ (Get-Command pwsh).Source -View Raw
+    $utf8BytesScript = '$bytes = [System.Text.Encoding]::UTF8.GetBytes("┌─ ◉ │ └"); [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)'
+    & __humanizer_utf8_test__ -NoProfile -Command $utf8BytesScript > $utf8RawFile
+    $unicodeRawBytes = [System.IO.File]::ReadAllBytes($utf8RawFile)
+    $expectedUnicodeRawBytes = [System.Text.Encoding]::UTF8.GetBytes('┌─ ◉ │ └')
+    Assert-Equal -Actual ($unicodeRawBytes -join ',') -Expected ($expectedUnicodeRawBytes -join ',') -Name 'New-Humanizer Raw view preserves UTF-8 native stdout bytes'
+} finally {
+    [Console]::OutputEncoding = $oldConsoleOutputEncoding
+    Remove-Item $utf8RawFile -ErrorAction SilentlyContinue
+    Remove-Item Alias:\__humanizer_utf8_test__ -Force -ErrorAction SilentlyContinue
+    Remove-Item function:global:__humanizer_utf8_test__ -ErrorAction SilentlyContinue
+}
+
 $viewConfig = Get-HumanizerView -Name __humanizer_auto_test__
 Assert-Equal -Actual $viewConfig.View -Expected 'Auto' -Name 'Get-HumanizerView returns updated view'
 Assert-Equal -Actual $viewConfig.ExpandDepth -Expected 2 -Name 'Get-HumanizerView returns updated ExpandDepth'

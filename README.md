@@ -158,7 +158,9 @@ New-Humanizer gh -View PrettyJson
 
 ### Raw output
 
-Use `Raw` when a command should never render terminal output.
+Use `Raw` for non-JSON CLIs that should keep native terminal behavior.
+Raw wrappers are registered as direct aliases to the native executable, so
+Humanizer does not capture or re-emit stdout.
 
 ```powershell
 New-Humanizer rotunda -View Raw
@@ -188,6 +190,7 @@ sd opened | To-HumanizerView PrettyJson
 | Scenario | What happens |
 |---|---|
 | Running in a terminal | JSON is detected and rendered with the configured view |
+| Wrapper configured with `Raw` | The wrapper is a native alias, so output is not captured or rendered |
 | Output piped to another process | `[Console]::IsOutputRedirected` is `true`, so output stays raw through `Write-Output` |
 | Output redirected to a file | Output stays raw through `Write-Output` |
 | Output is not valid JSON | Raw `Write-Output` regardless of destination |

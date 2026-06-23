@@ -1376,10 +1376,18 @@ function New-Humanizer {
     $funcBody = {
         $config = $configurations[$configName]
 
-        # Only stdout is captured. stderr flows through to the caller's error
-        # stream naturally, keeping error messages separate from JSON output.
-        $raw = & $config.Path @args
-        $exitCode = $LASTEXITCODE
+        # Native CLIs increasingly write UTF-8 regardless of the host code page.
+        $oldConsoleOutputEncoding = [Console]::OutputEncoding
+        try {
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+            # Only stdout is captured. stderr flows through to the caller's error
+            # stream naturally, keeping error messages separate from JSON output.
+            $raw = & $config.Path @args
+            $exitCode = $LASTEXITCODE
+        } finally {
+            [Console]::OutputEncoding = $oldConsoleOutputEncoding
+        }
 
         # Guard against null / empty output (e.g. command produced no stdout).
         # The array check is needed because PowerShell may return an empty
@@ -1406,8 +1414,14 @@ function New-Humanizer {
         $global:LASTEXITCODE = $exitCode
     }.GetNewClosure()
 
-    # Register the function in the caller's (global) scope
-    Set-Item -Path "function:global:$Name" -Value $funcBody
+    if ($View -eq 'Raw') {
+        Remove-Item -Path "function:global:$Name" -ErrorAction SilentlyContinue
+        Set-Alias -Name $Name -Value $resolvedPath -Scope Global -Force
+    } else {
+        Remove-Item -Path "Alias:\$Name" -Force -ErrorAction SilentlyContinue
+        Set-Item -Path "function:global:$Name" -Value $funcBody
+    }
+
     Write-Verbose "humanizer: '$Name' -> '$resolvedPath'"
 }
 
@@ -1451,6 +1465,13 @@ function Set-HumanizerView {
     $config.View = $View
     if ($PSBoundParameters.ContainsKey('ExpandDepth')) {
         $config.ExpandDepth = $ExpandDepth
+    }
+
+    if ($View -eq 'Raw') {
+        Remove-Item -Path "function:global:$Name" -ErrorAction SilentlyContinue
+        Set-Alias -Name $Name -Value $config.Path -Scope Global -Force
+    } else {
+        New-Humanizer -Name $Name -Path $config.Path -View $config.View -ExpandDepth $config.ExpandDepth
     }
 
     return Get-HumanizerView -Name $Name
