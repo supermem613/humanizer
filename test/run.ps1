@@ -86,6 +86,27 @@ if ($table.Contains('Length')) {
     throw 'Table view failed. Top-level JSON array rendered array metadata instead of rows.'
 }
 
+$typedJson = '[{"name":"api","ok":true,"count":2,"missing":null}]'
+$typedRows = script:ConvertTo-HumanizerTable -Value (ConvertFrom-Json -InputObject $typedJson -Depth 100 -NoEnumerate) -MaxWidth 100
+$typedTable = $typedRows -join "`n"
+foreach ($style in @($script:HumanizerAnsiStyles.String, $script:HumanizerAnsiStyles.Boolean, $script:HumanizerAnsiStyles.Number, $script:HumanizerAnsiStyles.Null)) {
+    if (-not $typedTable.Contains($style)) {
+        throw "Table view failed. Expected ANSI style '$style'."
+    }
+}
+
+foreach ($line in $typedRows) {
+    $plainLine = script:Remove-HumanizerStyle $line
+    if ($plainLine.Length -gt 100) {
+        throw "Table view failed. ANSI styling affected visible width: $plainLine"
+    }
+}
+
+$typedPlain = ($typedRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+if ($typedPlain.Contains('│ 1 │')) {
+    throw 'Table view failed. Single-item arrays rendered an extra blank row.'
+}
+
 $shallowTable = (script:ConvertTo-HumanizerTable -Value $array -ExpandDepth 0) -join "`n"
 if (-not $shallowTable.Contains('"restarts":0')) {
     throw 'Table view failed. ExpandDepth 0 did not compact nested JSON.'
@@ -93,7 +114,9 @@ if (-not $shallowTable.Contains('"restarts":0')) {
 
 $sdJson = '{"ok":true,"command":"opened","data":[{"kind":"changelist","cl":"default","description":"<created by soda>","fileCount":3},{"kind":"file","cl":"default","path":"README.md","rev":"head","action":"edit","type":"text"}]}'
 $sdEnvelope = ConvertFrom-Json -InputObject $sdJson -Depth 100 -NoEnumerate
-$autoTable = (script:ConvertTo-HumanizerAutoTable -Value $sdEnvelope -ExpandDepth 2) -join "`n"
+$autoTable = ((script:ConvertTo-HumanizerAutoTable -Value $sdEnvelope -ExpandDepth 2) | ForEach-Object {
+    script:Remove-HumanizerStyle $_
+}) -join "`n"
 foreach ($expected in @('ok: true', 'command: opened', 'kind', 'fileCount', 'README.md')) {
     if (-not $autoTable.Contains($expected)) {
         throw "Auto view failed. Expected unwrapped envelope output to contain '$expected'."
@@ -108,12 +131,13 @@ $wideSdJson = '{"ok":true,"command":"opened","data":[{"kind":"changelist","cl":"
 $wideSdEnvelope = ConvertFrom-Json -InputObject $wideSdJson -Depth 100 -NoEnumerate
 $narrowAutoTable = script:ConvertTo-HumanizerAutoTable -Value $wideSdEnvelope -ExpandDepth 2 -MaxWidth 100
 foreach ($line in $narrowAutoTable) {
-    if ($line.Length -gt 100) {
-        throw "Auto view failed. Expected width-limited line, got $($line.Length): $line"
+    $plainLine = script:Remove-HumanizerStyle $line
+    if ($plainLine.Length -gt 100) {
+        throw "Auto view failed. Expected width-limited line, got $($plainLine.Length): $plainLine"
     }
 }
 
-if (-not (($narrowAutoTable -join "`n").Contains('...'))) {
+if (-not ((($narrowAutoTable | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n").Contains('...'))) {
     throw 'Auto view failed. Wide table did not truncate any cell.'
 }
 

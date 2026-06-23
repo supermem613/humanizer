@@ -24,6 +24,109 @@
 # Above this threshold the structural check (leading { or [) is sufficient.
 # The actual parse cost is deferred to ConvertTo-ColorJson, which runs once.
 $script:MaxValidationParseSize = 1MB
+$script:HumanizerAnsiReset = "$([char]27)[0m"
+$script:HumanizerAnsiStyles = @{
+    Border = "$([char]27)[90m"
+    Boolean = "$([char]27)[35m"
+    Header = "$([char]27)[33m"
+    Json = "$([char]27)[36m"
+    Key = "$([char]27)[33m"
+    Null = "$([char]27)[90m"
+    Number = "$([char]27)[36m"
+    String = "$([char]27)[32m"
+}
+
+function script:ConvertTo-HumanizerStyledText {
+    param(
+        [string]$Text,
+        [string]$Kind
+    )
+
+    if ([string]::IsNullOrEmpty($Text) -or -not $script:HumanizerAnsiStyles.ContainsKey($Kind)) {
+        return $Text
+    }
+
+    return $script:HumanizerAnsiStyles[$Kind] + $Text + $script:HumanizerAnsiReset
+}
+
+function script:Remove-HumanizerStyle {
+    param([string]$Text)
+
+    $escape = [regex]::Escape([string][char]27)
+    $semicolon = [char]59
+    return $Text -replace "$escape\[[0-9$semicolon]*m", ''
+}
+
+function script:New-HumanizerCell {
+    param(
+        [AllowNull()]
+        [object]$Text,
+
+        [string]$Kind = 'String'
+    )
+
+    return [pscustomobject]@{
+        Text = [string]$Text
+        Kind = $Kind
+    }
+}
+
+function script:Get-HumanizerCellText {
+    param([object]$Cell)
+
+    if ($null -ne $Cell -and $Cell.PSObject.Properties['Text']) {
+        return [string]$Cell.Text
+    }
+
+    return [string]$Cell
+}
+
+function script:Get-HumanizerCellKind {
+    param([object]$Cell)
+
+    if ($null -ne $Cell -and $Cell.PSObject.Properties['Kind']) {
+        return [string]$Cell.Kind
+    }
+
+    return 'String'
+}
+
+function script:Get-HumanizerScalarKind {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return 'Null'
+    }
+
+    if ($Value -is [bool]) {
+        return 'Boolean'
+    }
+
+    if ($Value -is [byte] -or
+        $Value -is [sbyte] -or
+        $Value -is [int16] -or
+        $Value -is [uint16] -or
+        $Value -is [int] -or
+        $Value -is [uint32] -or
+        $Value -is [long] -or
+        $Value -is [uint64] -or
+        $Value -is [single] -or
+        $Value -is [double] -or
+        $Value -is [decimal]) {
+        return 'Number'
+    }
+
+    return 'String'
+}
+
+function script:Get-HumanizerProperty {
+    param(
+        [object]$Value,
+        [string]$Name
+    )
+
+    return $Value.PSObject.Properties | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
+}
 
 function script:ConvertTo-ColorJson {
     <#
@@ -62,18 +165,25 @@ function script:ConvertTo-ColorJson {
             $value  = $Matches[4]
 
             Write-Host -NoNewline $indent
-            Write-Host -NoNewline "`"$key`"" -ForegroundColor DarkYellow
+            Write-Host -NoNewline (script:ConvertTo-HumanizerStyledText -Text "`"$key`"" -Kind 'Key')
             Write-Host -NoNewline $colon
 
             if ($value -match '^"') {
-                Write-Host $value -ForegroundColor Green
+                Write-Host (script:ConvertTo-HumanizerStyledText -Text $value -Kind 'String')
             } elseif ($value -match $primitivePattern) {
-                Write-Host $value -ForegroundColor Cyan
+                $kind = 'Number'
+                if ($value -match '^(true|false)') {
+                    $kind = 'Boolean'
+                } elseif ($value -match '^null') {
+                    $kind = 'Null'
+                }
+
+                Write-Host (script:ConvertTo-HumanizerStyledText -Text $value -Kind $kind)
             } else {
-                Write-Host $value -ForegroundColor Gray
+                Write-Host (script:ConvertTo-HumanizerStyledText -Text $value -Kind 'Border')
             }
         } else {
-            Write-Host $line -ForegroundColor Gray
+            Write-Host (script:ConvertTo-HumanizerStyledText -Text $line -Kind 'Border')
         }
     }
 }
@@ -131,13 +241,15 @@ function script:ConvertTo-HumanizerCell {
 
     if ((script:Test-HumanizerRecord $Value) -or (script:Test-HumanizerList $Value)) {
         if ($Depth -ge $ExpandDepth) {
-            return ($Value | ConvertTo-Json -Depth 100 -Compress)
+            return script:New-HumanizerCell -Text ($Value | ConvertTo-Json -Depth 100 -Compress) -Kind 'Json'
         }
 
-        return (script:ConvertTo-HumanizerTable -Value $Value -Depth ($Depth + 1) -ExpandDepth $ExpandDepth) -join "`n"
+        $nested = script:ConvertTo-HumanizerTable -Value $Value -Depth ($Depth + 1) -ExpandDepth $ExpandDepth
+        $plainNested = $nested | ForEach-Object { script:Remove-HumanizerStyle $_ }
+        return script:New-HumanizerCell -Text ($plainNested -join "`n") -Kind 'String'
     }
 
-    return script:ConvertTo-HumanizerScalar $Value
+    return script:New-HumanizerCell -Text (script:ConvertTo-HumanizerScalar $Value) -Kind (script:Get-HumanizerScalarKind $Value)
 }
 
 function script:Test-HumanizerEnvelope {
@@ -147,7 +259,7 @@ function script:Test-HumanizerEnvelope {
         return $false
     }
 
-    $dataProperty = $Value.PSObject.Properties['data']
+    $dataProperty = script:Get-HumanizerProperty -Value $Value -Name 'data'
     if (-not $dataProperty) {
         return $false
     }
@@ -189,14 +301,17 @@ function script:ConvertTo-HumanizerAutoTable {
             continue
         }
 
-        $lines += "$($property.Name): $(script:ConvertTo-HumanizerScalar $property.Value)"
+        $name = script:ConvertTo-HumanizerStyledText -Text $property.Name -Kind 'Key'
+        $styledValue = script:ConvertTo-HumanizerStyledText -Text (script:ConvertTo-HumanizerScalar $property.Value) -Kind (script:Get-HumanizerScalarKind $property.Value)
+        $lines += "${name}: $styledValue"
     }
 
     if ($lines.Count -gt 0) {
         $lines += ''
     }
 
-    $lines += script:ConvertTo-HumanizerTable -Value $Value.PSObject.Properties['data'].Value -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth
+    $dataProperty = script:Get-HumanizerProperty -Value $Value -Name 'data'
+    $lines += script:ConvertTo-HumanizerTable -Value $dataProperty.Value -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth
     return $lines
 }
 
@@ -215,7 +330,8 @@ function script:Get-HumanizerRecordNames {
 function script:Get-HumanizerValueWidth {
     param([string]$Value)
 
-    $lines = $Value -split "`n"
+    $plain = script:Remove-HumanizerStyle $Value
+    $lines = $plain -split "`n"
     $width = 0
     foreach ($line in $lines) {
         if ($line.Length -gt $width) {
@@ -301,18 +417,20 @@ function script:New-HumanizerBorder {
         '─' * ($width + 2)
     }
 
-    return $Left + ($parts -join $Middle) + $Right
+    return script:ConvertTo-HumanizerStyledText -Text ($Left + ($parts -join $Middle) + $Right) -Kind 'Border'
 }
 
 function script:New-HumanizerTableRow {
     param(
-        [string[]]$Cells,
+        [object[]]$Cells,
         [int[]]$Widths
     )
 
     $splitCells = @()
+    $cellKinds = @()
     foreach ($cell in $Cells) {
-        $splitCells += ,@(([string]$cell) -split "`n")
+        $splitCells += ,@((script:Get-HumanizerCellText $cell) -split "`n")
+        $cellKinds += script:Get-HumanizerCellKind $cell
     }
 
     $height = 1
@@ -334,11 +452,13 @@ function script:New-HumanizerTableRow {
             }
 
             $line = script:Limit-HumanizerCellLine -Value $line -Width $Widths[$columnIndex]
-            $parts += ' ' + $line.PadRight($Widths[$columnIndex]) + ' '
+            $styledLine = script:ConvertTo-HumanizerStyledText -Text $line -Kind $cellKinds[$columnIndex]
+            $parts += ' ' + $styledLine + (' ' * ($Widths[$columnIndex] - $line.Length)) + ' '
             $columnIndex++
         }
 
-        $rows += '│' + ($parts -join '│') + '│'
+        $border = script:ConvertTo-HumanizerStyledText -Text '│' -Kind 'Border'
+        $rows += $border + ($parts -join $border) + $border
         $lineIndex++
     }
 
@@ -359,7 +479,7 @@ function script:Format-HumanizerBoxTable {
         $minimumWidth = [Math]::Min((script:Get-HumanizerValueWidth $Headers[$columnIndex]), 12)
         $width = script:Get-HumanizerValueWidth $Headers[$columnIndex]
         foreach ($row in $Rows) {
-            $cellWidth = script:Get-HumanizerValueWidth ([string]$row[$columnIndex])
+            $cellWidth = script:Get-HumanizerValueWidth (script:Get-HumanizerCellText $row[$columnIndex])
             if ($cellWidth -gt $width) {
                 $width = $cellWidth
             }
@@ -374,10 +494,13 @@ function script:Format-HumanizerBoxTable {
 
     $output = @()
     $output += script:New-HumanizerBorder '┌' '┬' '┐' $widths
-    $output += script:New-HumanizerTableRow $Headers $widths
+    $headerCells = foreach ($header in $Headers) {
+        script:New-HumanizerCell -Text $header -Kind 'Header'
+    }
+    $output += script:New-HumanizerTableRow $headerCells $widths
     $output += script:New-HumanizerBorder '├' '┼' '┤' $widths
     foreach ($row in $Rows) {
-        $output += script:New-HumanizerTableRow ([string[]]$row) $widths
+        $output += script:New-HumanizerTableRow ([object[]]$row) $widths
     }
 
     $output += script:New-HumanizerBorder '└' '┴' '┘' $widths
@@ -411,7 +534,7 @@ function script:ConvertTo-HumanizerListTable {
         [int]$MaxWidth = 0
     )
 
-    $items = script:Get-HumanizerListItems $Value
+    $items = @(script:Get-HumanizerListItems $Value)
     if ($items.Count -eq 0) {
         return script:Format-HumanizerBoxTable -Headers @('#', 'Value') -Rows @() -MaxWidth $MaxWidth
     }

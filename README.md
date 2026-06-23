@@ -144,6 +144,8 @@ sd opened > opened.json
 | `PrettyJson` | Re-indents JSON and colorizes keys, strings, numbers, booleans, null, and structural characters |
 | `Raw` | Always writes the original output |
 
+`Table`, `Auto`, and `PrettyJson` share the same type-aware colors: keys and headers are yellow, strings are green, numbers are cyan, booleans are magenta, null and borders are gray. Width calculations ignore ANSI escape sequences, so color does not cause table wrapping.
+
 ---
 
 ## Public API
