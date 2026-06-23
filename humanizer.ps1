@@ -12,9 +12,11 @@
 #
 # After that, just run the command normally:
 #
-#   kubectl get pods -o json      # colorized pretty JSON in the terminal
+#   kubectl get pods -o json      # colorized tree JSON in the terminal
 #   kubectl get pods -o json | jq # raw JSON for agents and pipes
+#   kubectl get pods -o json | To-HumanizerView Tree
 #   kubectl get pods -o json > out.json  # raw JSON written to file
+#   Set-HumanizerView kubectl -View Raw
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -35,6 +37,7 @@ $script:HumanizerAnsiStyles = @{
     Number = "$([char]27)[36m"
     String = "$([char]27)[32m"
 }
+$script:HumanizerConfigurations = @{}
 
 function script:ConvertTo-HumanizerStyledText {
     param(
@@ -186,6 +189,49 @@ function script:ConvertTo-ColorJson {
             Write-Host (script:ConvertTo-HumanizerStyledText -Text $line -Kind 'Border')
         }
     }
+
+    function script:ConvertTo-HumanizerPrettyJson {
+        param(
+            [Parameter(Mandatory)]
+            [string]$Json
+        )
+
+        $obj = $Json | ConvertFrom-Json -Depth 100 -ErrorAction Stop
+        $pretty = $obj | ConvertTo-Json -Depth 100 -ErrorAction Stop
+        $primitivePattern = '^(true|false|null|-?\d+(\.\d+)?([eE][+-]?\d+)?)(\s*)(,|\]|}|$)'
+        $lines = @()
+        foreach ($line in ($pretty -split "`n")) {
+            if ($line -match '^(\s*)"([^"]+)"(\s*:\s*)(.*)$') {
+                $indent = $Matches[1]
+                $key = $Matches[2]
+                $colon = $Matches[3]
+                $value = $Matches[4]
+
+                $styledValue = $null
+                if ($value -match '^"') {
+                    $styledValue = script:ConvertTo-HumanizerStyledText -Text $value -Kind 'String'
+                } elseif ($value -match $primitivePattern) {
+                    $kind = 'Number'
+                    if ($value -match '^(true|false)') {
+                        $kind = 'Boolean'
+                    } elseif ($value -match '^null') {
+                        $kind = 'Null'
+                    }
+
+                    $styledValue = script:ConvertTo-HumanizerStyledText -Text $value -Kind $kind
+                } else {
+                    $styledValue = script:ConvertTo-HumanizerStyledText -Text $value -Kind 'Border'
+                }
+
+                $styledKey = script:ConvertTo-HumanizerStyledText -Text "`"$key`"" -Kind 'Key'
+                $lines += $indent + $styledKey + $colon + $styledValue
+            } else {
+                $lines += script:ConvertTo-HumanizerStyledText -Text $line -Kind 'Border'
+            }
+        }
+
+        return $lines
+    }
 }
 
 function script:Test-HumanizerRecord {
@@ -224,6 +270,30 @@ function script:ConvertTo-HumanizerScalar {
     }
 
     return [string]$Value
+}
+
+function script:Get-HumanizerComplexSummary {
+    param([object]$Value)
+
+    if (script:Test-HumanizerRecord $Value) {
+        $count = @($Value.PSObject.Properties).Count
+        if ($count -eq 1) {
+            return '{1 key}'
+        }
+
+        return "{$count keys}"
+    }
+
+    if (script:Test-HumanizerList $Value) {
+        $count = @(script:Get-HumanizerListItems $Value).Count
+        if ($count -eq 1) {
+            return '[1 item]'
+        }
+
+        return "[$count items]"
+    }
+
+    return script:ConvertTo-HumanizerScalar $Value
 }
 
 function script:Test-HumanizerScalar {
@@ -614,6 +684,236 @@ function script:ConvertTo-HumanizerTable {
     return @(script:ConvertTo-HumanizerScalar $Value)
 }
 
+function script:Limit-HumanizerTreeValue {
+    param(
+        [string]$Value,
+        [int]$MaxWidth,
+        [int]$PrefixWidth
+    )
+
+    if ($MaxWidth -le 0) {
+        return $Value
+    }
+
+    $budget = $MaxWidth - $PrefixWidth
+    if ($budget -le 0) {
+        return ''
+    }
+
+    return script:Limit-HumanizerCellLine -Value $Value -Width $budget
+}
+
+function script:New-HumanizerTreeLine {
+    param(
+        [string]$Prefix,
+        [string]$Connector,
+        [string]$Label,
+        [string]$LabelKind,
+        [AllowNull()]
+        [object]$Value,
+        [string]$ValueKind,
+        [bool]$HasValue,
+        [int]$MaxWidth = 0
+    )
+
+    $styledPrefix = script:ConvertTo-HumanizerStyledText -Text $Prefix -Kind 'Border'
+    $styledConnector = script:ConvertTo-HumanizerStyledText -Text $Connector -Kind 'Border'
+    $styledLabel = script:ConvertTo-HumanizerStyledText -Text $Label -Kind $LabelKind
+
+    if (-not $HasValue) {
+        return $styledPrefix + $styledConnector + $styledLabel + ':'
+    }
+
+    $plainStart = $Prefix + $Connector + $Label + ': '
+    $plainValue = [string]$Value
+    $limitedValue = script:Limit-HumanizerTreeValue -Value $plainValue -MaxWidth $MaxWidth -PrefixWidth $plainStart.Length
+    $styledValue = script:ConvertTo-HumanizerStyledText -Text $limitedValue -Kind $ValueKind
+    return $styledPrefix + $styledConnector + $styledLabel + ': ' + $styledValue
+}
+
+function script:Add-HumanizerTreeLine {
+    param(
+        [System.Collections.Generic.List[string]]$Lines,
+        [string]$Prefix,
+        [string]$Connector,
+        [string]$Label,
+        [string]$LabelKind,
+        [AllowNull()]
+        [object]$Value,
+        [string]$ValueKind,
+        [bool]$HasValue,
+        [int]$MaxWidth = 0
+    )
+
+    $borderStart = $script:HumanizerAnsiStyles.Border
+    $labelStart = $script:HumanizerAnsiStyles[$LabelKind]
+    $reset = $script:HumanizerAnsiReset
+    $styledPrefix = $borderStart + $Prefix + $Connector + $reset
+    $styledLabel = $labelStart + $Label + $reset
+
+    if (-not $HasValue) {
+        $Lines.Add($styledPrefix + $styledLabel + ':')
+        return
+    }
+
+    $plainStart = $Prefix + $Connector + $Label + ': '
+    $plainValue = [string]$Value
+    $limitedValue = script:Limit-HumanizerTreeValue -Value $plainValue -MaxWidth $MaxWidth -PrefixWidth $plainStart.Length
+    if ($limitedValue.Length -eq 0) {
+        $Lines.Add($styledPrefix + $styledLabel + ': ')
+        return
+    }
+
+    $valueStart = $script:HumanizerAnsiStyles[$ValueKind]
+    $Lines.Add($styledPrefix + $styledLabel + ': ' + $valueStart + $limitedValue + $reset)
+}
+
+function script:Add-HumanizerTreeEntries {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Value,
+        [int]$Depth,
+        [int]$ExpandDepth,
+        [int]$MaxWidth,
+        [string]$Prefix,
+        [bool]$Root,
+        [System.Collections.Generic.List[string]]$Lines
+    )
+
+    $isRecord = script:Test-HumanizerRecord $Value
+    $isList = script:Test-HumanizerList $Value
+    if (-not $isRecord -and -not $isList) {
+        $scalar = script:ConvertTo-HumanizerScalar $Value
+        $Lines.Add((script:ConvertTo-HumanizerStyledText -Text $scalar -Kind (script:Get-HumanizerScalarKind $Value)))
+        return
+    }
+
+    $children = $null
+    if ($isRecord) {
+        $children = @($Value.PSObject.Properties)
+    } else {
+        $children = @(script:Get-HumanizerListItems $Value)
+    }
+
+    $borderStart = $script:HumanizerAnsiStyles.Border
+    $reset = $script:HumanizerAnsiReset
+    $index = 0
+    while ($index -lt $children.Count) {
+        if ($isRecord) {
+            $label = [string]$children[$index].Name
+            $labelKind = 'Key'
+            $entryValue = $children[$index].Value
+        } else {
+            $label = "[$index]"
+            $labelKind = 'Header'
+            $entryValue = $children[$index]
+        }
+
+        $isLast = ($index -eq ($children.Count - 1))
+
+        $connector = ''
+        $childPrefix = $Prefix
+        if (-not $Root) {
+            if ($isLast) {
+                $connector = '└─ '
+                $childPrefix += '   '
+            } else {
+                $connector = '├─ '
+                $childPrefix += '│  '
+            }
+        }
+
+        $styledPrefix = $borderStart + $Prefix + $connector + $reset
+        $styledLabel = $script:HumanizerAnsiStyles[$labelKind] + $label + $reset
+        if (script:Test-HumanizerScalar $entryValue) {
+            if ($null -eq $entryValue) {
+                $plainValue = 'null'
+                $valueKind = 'Null'
+            } elseif ($entryValue -is [bool]) {
+                $plainValue = $entryValue.ToString().ToLowerInvariant()
+                $valueKind = 'Boolean'
+            } elseif ($entryValue -is [byte] -or
+                $entryValue -is [sbyte] -or
+                $entryValue -is [int16] -or
+                $entryValue -is [uint16] -or
+                $entryValue -is [int] -or
+                $entryValue -is [uint32] -or
+                $entryValue -is [long] -or
+                $entryValue -is [uint64] -or
+                $entryValue -is [single] -or
+                $entryValue -is [double] -or
+                $entryValue -is [decimal]) {
+                $plainValue = [string]$entryValue
+                $valueKind = 'Number'
+            } else {
+                $plainValue = [string]$entryValue
+                $valueKind = 'String'
+            }
+
+            if ($MaxWidth -gt 0) {
+                $budget = $MaxWidth - ($Prefix.Length + $connector.Length + $label.Length + 2)
+                if ($budget -le 0) {
+                    $plainValue = ''
+                } elseif ($plainValue.Length -gt $budget) {
+                    if ($budget -le 3) {
+                        $plainValue = $plainValue.Substring(0, $budget)
+                    } else {
+                        $plainValue = $plainValue.Substring(0, $budget - 3) + '...'
+                    }
+                }
+            }
+
+            if ($plainValue.Length -eq 0) {
+                $Lines.Add($styledPrefix + $styledLabel + ': ')
+            } else {
+                $Lines.Add($styledPrefix + $styledLabel + ': ' + $script:HumanizerAnsiStyles[$valueKind] + $plainValue + $reset)
+            }
+        } elseif ($Depth -ge $ExpandDepth) {
+            $plainValue = script:Get-HumanizerComplexSummary $entryValue
+            if ($MaxWidth -gt 0) {
+                $budget = $MaxWidth - ($Prefix.Length + $connector.Length + $label.Length + 2)
+                if ($budget -le 0) {
+                    $plainValue = ''
+                } elseif ($plainValue.Length -gt $budget) {
+                    if ($budget -le 3) {
+                        $plainValue = $plainValue.Substring(0, $budget)
+                    } else {
+                        $plainValue = $plainValue.Substring(0, $budget - 3) + '...'
+                    }
+                }
+            }
+
+            if ($plainValue.Length -eq 0) {
+                $Lines.Add($styledPrefix + $styledLabel + ': ')
+            } else {
+                $Lines.Add($styledPrefix + $styledLabel + ': ' + $borderStart + $plainValue + $reset)
+            }
+        } else {
+            $Lines.Add($styledPrefix + $styledLabel + ':')
+            script:Add-HumanizerTreeEntries -Value $entryValue -Depth ($Depth + 1) -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $childPrefix -Root $false -Lines $Lines
+        }
+
+        $index++
+    }
+}
+
+function script:ConvertTo-HumanizerTree {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Value,
+
+        [int]$Depth = 0,
+
+        [int]$ExpandDepth = 2,
+
+        [int]$MaxWidth = 0
+    )
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    script:Add-HumanizerTreeEntries -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix '' -Root $true -Lines $lines
+    return $lines.ToArray()
+}
+
 function script:Test-IsJson {
     <#
     .SYNOPSIS
@@ -654,6 +954,14 @@ function script:Test-IsTerminal {
     return (-not [Console]::IsOutputRedirected)
 }
 
+function script:Get-HumanizerMaxWidth {
+    if ([Console]::IsOutputRedirected) {
+        return 120
+    }
+
+    return [Math]::Max(40, [Console]::WindowWidth - 1)
+}
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -661,8 +969,8 @@ function script:Test-IsTerminal {
 function Format-HumanizerJson {
     <#
     .SYNOPSIS
-        Pretty-print and colorize $InputString if it looks like JSON and
-        stdout is a terminal.  Falls back to raw output for pipes/files.
+        Render $InputString if it looks like JSON and stdout is a terminal.
+        Falls back to raw output for pipes and files.
 
     .EXAMPLE
         $raw = & kubectl get pods -o json
@@ -672,8 +980,8 @@ function Format-HumanizerJson {
         [Parameter(Mandatory, ValueFromPipeline)]
         [string]$InputString,
 
-        [ValidateSet('Raw', 'PrettyJson', 'Table', 'Auto')]
-        [string]$View = 'Auto',
+        [ValidateSet('Raw', 'PrettyJson', 'Table', 'Tree', 'Auto')]
+        [string]$View = 'Tree',
 
         [ValidateRange(0, 10)]
         [int]$ExpandDepth = 2
@@ -696,13 +1004,17 @@ function Format-HumanizerJson {
                 }
             }
 
-            $maxWidth = [Math]::Max(40, [Console]::WindowWidth - 1)
+            $maxWidth = script:Get-HumanizerMaxWidth
             if ($View -eq 'Auto' -and $resolvedView -eq 'Table') {
                 foreach ($line in (script:ConvertTo-HumanizerAutoTable -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth)) {
                     Write-Host $line
                 }
             } elseif ($resolvedView -eq 'Table') {
                 foreach ($line in (script:ConvertTo-HumanizerTable -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth)) {
+                    Write-Host $line
+                }
+            } elseif ($resolvedView -eq 'Tree') {
+                foreach ($line in (script:ConvertTo-HumanizerTree -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth)) {
                     Write-Host $line
                 }
             } else {
@@ -719,11 +1031,79 @@ function Format-HumanizerJson {
     Write-Output $InputString
 }
 
+function To-HumanizerView {
+    <#
+    .SYNOPSIS
+        Render piped JSON with an explicit Humanizer view.
+    #>
+    param(
+        [Parameter(Position = 0)]
+        [ValidateSet('Raw', 'PrettyJson', 'Table', 'Tree', 'Auto')]
+        [string]$View = 'Raw',
+
+        [Parameter(ValueFromPipeline)]
+        [string]$InputObject,
+
+        [ValidateRange(0, 10)]
+        [int]$ExpandDepth = 2
+    )
+
+    begin {
+        $inputLines = @()
+    }
+
+    process {
+        if ($null -ne $InputObject) {
+            $inputLines += $InputObject
+        }
+    }
+
+    end {
+        $text = ([string]::Join("`n", $inputLines)) -replace "`r`n?", "`n"
+        $text = $text.TrimEnd()
+
+        if ($View -eq 'Raw') {
+            Write-Output $text
+            return
+        }
+
+        if (-not (script:Test-IsJson $text)) {
+            Write-Output $text
+            return
+        }
+
+        try {
+            $obj = ConvertFrom-Json -InputObject $text -Depth 100 -NoEnumerate -ErrorAction Stop
+            $resolvedView = $View
+            if ($View -eq 'Auto') {
+                if ((script:Test-HumanizerRecord $obj) -or (script:Test-HumanizerList $obj)) {
+                    $resolvedView = 'Table'
+                } else {
+                    $resolvedView = 'PrettyJson'
+                }
+            }
+
+            $maxWidth = script:Get-HumanizerMaxWidth
+            if ($View -eq 'Auto' -and $resolvedView -eq 'Table') {
+                script:ConvertTo-HumanizerAutoTable -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth | Write-Output
+            } elseif ($resolvedView -eq 'Table') {
+                script:ConvertTo-HumanizerTable -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth | Write-Output
+            } elseif ($resolvedView -eq 'Tree') {
+                script:ConvertTo-HumanizerTree -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth | Write-Output
+            } else {
+                script:ConvertTo-HumanizerPrettyJson -Json $text | Write-Output
+            }
+        } catch {
+            Write-Output $text
+        }
+    }
+}
+
 function New-Humanizer {
     <#
     .SYNOPSIS
-        Create a wrapper function for an executable that automatically
-        pretty-prints JSON output when running in a terminal.
+        Create a wrapper function for an executable that automatically renders
+        JSON output when running in a terminal.
 
     .PARAMETER Name
         The function name you want to use (e.g. "kubectl").
@@ -743,8 +1123,8 @@ function New-Humanizer {
 
         [string]$Path,
 
-        [ValidateSet('Raw', 'PrettyJson', 'Table', 'Auto')]
-        [string]$View = 'Auto',
+        [ValidateSet('Raw', 'PrettyJson', 'Table', 'Tree', 'Auto')]
+        [string]$View = 'Tree',
 
         [ValidateRange(0, 10)]
         [int]$ExpandDepth = 2
@@ -761,14 +1141,23 @@ function New-Humanizer {
     # Capture the resolved path in a local variable so the scriptblock closes
     # over it correctly even when New-Humanizer is called multiple times.
     $resolvedPath = $Path
+    $script:HumanizerConfigurations[$Name] = [pscustomobject]@{
+        Name = $Name
+        Path = $resolvedPath
+        View = $View
+        ExpandDepth = $ExpandDepth
+    }
+
+    $configName = $Name
+    $configurations = $script:HumanizerConfigurations
     $formatter = ${function:Format-HumanizerJson}
-    $viewName = $View
-    $viewExpandDepth = $ExpandDepth
 
     $funcBody = {
+        $config = $configurations[$configName]
+
         # Only stdout is captured. stderr flows through to the caller's error
         # stream naturally, keeping error messages separate from JSON output.
-        $raw = & $resolvedPath @args
+        $raw = & $config.Path @args
         $exitCode = $LASTEXITCODE
 
         # Guard against null / empty output (e.g. command produced no stdout).
@@ -786,7 +1175,11 @@ function New-Humanizer {
         $normalized = $joined -replace "`r`n?", "`n"
         $text      = $normalized.TrimEnd()
 
-        & $formatter $text -View $viewName -ExpandDepth $viewExpandDepth
+        if ($MyInvocation.PipelineLength -gt 1) {
+            Write-Output $text
+        } else {
+            & $formatter $text -View $config.View -ExpandDepth $config.ExpandDepth
+        }
 
         # Propagate the original exit code so callers can detect failures.
         $global:LASTEXITCODE = $exitCode
@@ -795,4 +1188,49 @@ function New-Humanizer {
     # Register the function in the caller's (global) scope
     Set-Item -Path "function:global:$Name" -Value $funcBody
     Write-Verbose "humanizer: '$Name' -> '$resolvedPath'"
+}
+
+function Get-HumanizerView {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    if (-not $script:HumanizerConfigurations.ContainsKey($Name)) {
+        throw "Humanizer wrapper '$Name' is not registered."
+    }
+
+    $config = $script:HumanizerConfigurations[$Name]
+    return [pscustomobject]@{
+        Name = $config.Name
+        Path = $config.Path
+        View = $config.View
+        ExpandDepth = $config.ExpandDepth
+    }
+}
+
+function Set-HumanizerView {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('Raw', 'PrettyJson', 'Table', 'Tree', 'Auto')]
+        [string]$View,
+
+        [ValidateRange(0, 10)]
+        [int]$ExpandDepth
+    )
+
+    if (-not $script:HumanizerConfigurations.ContainsKey($Name)) {
+        throw "Humanizer wrapper '$Name' is not registered."
+    }
+
+    $config = $script:HumanizerConfigurations[$Name]
+    $config.View = $View
+    if ($PSBoundParameters.ContainsKey('ExpandDepth')) {
+        $config.ExpandDepth = $ExpandDepth
+    }
+
+    return Get-HumanizerView -Name $Name
 }

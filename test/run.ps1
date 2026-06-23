@@ -64,10 +64,27 @@ $json = '{"name":"demo","count":2}'
 $formatted = $json | Format-HumanizerJson
 Assert-Equal -Actual ($formatted -join "`n") -Expected $json -Name 'Format-HumanizerJson preserves redirected output'
 
-Assert-ParameterDefault -FunctionName 'Format-HumanizerJson' -ParameterName 'View' -Expected 'Auto'
+Assert-ParameterDefault -FunctionName 'Format-HumanizerJson' -ParameterName 'View' -Expected 'Tree'
+Assert-ParameterDefault -FunctionName 'To-HumanizerView' -ParameterName 'View' -Expected 'Raw'
 
 $raw = $json | Format-HumanizerJson -View Raw
 Assert-Equal -Actual ($raw -join "`n") -Expected $json -Name 'Format-HumanizerJson raw view preserves output'
+
+$pipelineRaw = $json | To-HumanizerView Raw
+Assert-Equal -Actual ($pipelineRaw -join "`n") -Expected $json -Name 'To-HumanizerView raw view preserves pipeline JSON'
+
+$pipelineDefault = $json | To-HumanizerView
+Assert-Equal -Actual ($pipelineDefault -join "`n") -Expected $json -Name 'To-HumanizerView default view preserves raw pipeline JSON'
+
+$pipelineTree = $json | To-HumanizerView -View Tree | ForEach-Object { script:Remove-HumanizerStyle $_ }
+foreach ($expected in @('name: demo', 'count: 2')) {
+    if (-not (($pipelineTree -join "`n").Contains($expected))) {
+        throw "To-HumanizerView tree view failed. Expected output to contain '$expected'."
+    }
+}
+
+$multiLineRaw = @('{', '  "name": "demo"', '}') | To-HumanizerView Raw
+Assert-Equal -Actual ($multiLineRaw -join "`n") -Expected "{`n  `"name`": `"demo`"`n}" -Name 'To-HumanizerView raw view preserves multiline pipeline JSON'
 
 $tableView = $json | Format-HumanizerJson -View Table
 Assert-Equal -Actual ($tableView -join "`n") -Expected $json -Name 'Format-HumanizerJson table view preserves redirected output'
@@ -112,6 +129,70 @@ if (-not $shallowTable.Contains('"restarts":0')) {
     throw 'Table view failed. ExpandDepth 0 did not compact nested JSON.'
 }
 
+$treeJson = '{"name":"demo","count":2,"ok":true,"missing":null,"meta":{"owner":"tools","retries":3},"tags":["cli","json"]}'
+$treeValue = ConvertFrom-Json -InputObject $treeJson -Depth 100 -NoEnumerate
+$treeRows = script:ConvertTo-HumanizerTree -Value $treeValue -ExpandDepth 2 -MaxWidth 120
+$plainTree = ($treeRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('name: demo', 'count: 2', 'ok: true', 'missing: null', 'meta:', '├─ owner: tools', '└─ retries: 3', 'tags:', '[0]: cli', '[1]: json')) {
+    if (-not $plainTree.Contains($expected)) {
+        throw "Tree view failed. Expected rendered tree to contain '$expected'."
+    }
+}
+
+foreach ($style in @($script:HumanizerAnsiStyles.Key, $script:HumanizerAnsiStyles.String, $script:HumanizerAnsiStyles.Number, $script:HumanizerAnsiStyles.Boolean, $script:HumanizerAnsiStyles.Null, $script:HumanizerAnsiStyles.Border)) {
+    if (-not (($treeRows -join "`n").Contains($style))) {
+        throw "Tree view failed. Expected ANSI style '$style'."
+    }
+}
+
+$collapsedTree = (script:ConvertTo-HumanizerTree -Value $treeValue -ExpandDepth 0 | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+if (-not ($collapsedTree.Contains('meta: {2 keys}') -and $collapsedTree.Contains('tags: [2 items]'))) {
+    throw 'Tree view failed. ExpandDepth 0 did not collapse complex children.'
+}
+
+$mixedTreeValue = ConvertFrom-Json -InputObject '["alpha",{"name":"nested"}]' -Depth 100 -NoEnumerate
+$mixedTree = (script:ConvertTo-HumanizerTree -Value $mixedTreeValue -ExpandDepth 2 | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('[0]: alpha', '[1]:', '└─ name: nested')) {
+    if (-not $mixedTree.Contains($expected)) {
+        throw "Tree view failed. Expected mixed array output to contain '$expected'."
+    }
+}
+
+$wideTreeJson = '{"description":"abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789","nested":{"path":"C:\\very\\wide\\path\\that\\must\\truncate\\for\\the\\terminal"}}'
+$wideTreeValue = ConvertFrom-Json -InputObject $wideTreeJson -Depth 100 -NoEnumerate
+$narrowTreeRows = script:ConvertTo-HumanizerTree -Value $wideTreeValue -ExpandDepth 2 -MaxWidth 48
+foreach ($line in $narrowTreeRows) {
+    $plainLine = script:Remove-HumanizerStyle $line
+    if ($plainLine.Length -gt 48) {
+        throw "Tree view failed. Expected width-limited line, got $($plainLine.Length): $plainLine"
+    }
+}
+
+if (-not ((($narrowTreeRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n").Contains('...'))) {
+    throw 'Tree view failed. Wide tree did not truncate any value.'
+}
+
+$manyTreeItems = 1..500 | ForEach-Object {
+    [pscustomobject]@{
+        id = $_
+        name = "item-$_"
+        ok = ($_ % 2 -eq 0)
+        meta = [pscustomobject]@{
+            path = "C:\repos\demo\src\file-$_.ts"
+            retries = $_ % 5
+        }
+    }
+}
+$treeElapsed = Measure-Command {
+    $manyTreeRows = script:ConvertTo-HumanizerTree -Value $manyTreeItems -ExpandDepth 2 -MaxWidth 120
+}
+if (@($manyTreeRows).Count -ne 3500) {
+    throw "Tree view failed. Expected 3500 rows in performance fixture, got $(@($manyTreeRows).Count)."
+}
+if ($treeElapsed.TotalMilliseconds -gt 2000) {
+    throw "Tree view failed. Rendering 500 nested records took $([int]$treeElapsed.TotalMilliseconds)ms."
+}
+
 $sdJson = '{"ok":true,"command":"opened","data":[{"kind":"changelist","cl":"default","description":"<created by soda>","fileCount":3},{"kind":"file","cl":"default","path":"README.md","rev":"head","action":"edit","type":"text"}]}'
 $sdEnvelope = ConvertFrom-Json -InputObject $sdJson -Depth 100 -NoEnumerate
 $autoTable = ((script:ConvertTo-HumanizerAutoTable -Value $sdEnvelope -ExpandDepth 2) | ForEach-Object {
@@ -143,7 +224,7 @@ if (-not ((($narrowAutoTable | ForEach-Object { script:Remove-HumanizerStyle $_ 
 
 New-Humanizer __humanizer_test__ (Get-Command pwsh).Source
 
-Assert-ParameterDefault -FunctionName 'New-Humanizer' -ParameterName 'View' -Expected 'Auto'
+Assert-ParameterDefault -FunctionName 'New-Humanizer' -ParameterName 'View' -Expected 'Tree'
 
 & __humanizer_test__ -NoProfile -Command "'{`"ok`":true}'" | Out-Null
 Assert-Equal -Actual $global:LASTEXITCODE -Expected 0 -Name 'New-Humanizer preserves success exit code'
@@ -155,6 +236,18 @@ $global:LASTEXITCODE = 0
 New-Humanizer __humanizer_auto_test__ (Get-Command pwsh).Source -View Auto -ExpandDepth 1
 & __humanizer_auto_test__ -NoProfile -Command "'{`"ok`":true}'" | Out-Null
 Assert-Equal -Actual $global:LASTEXITCODE -Expected 0 -Name 'New-Humanizer preserves Auto view configuration'
+
+Set-HumanizerView -Name __humanizer_auto_test__ -View Raw -ExpandDepth 0 | Out-Null
+$rawChanged = & __humanizer_auto_test__ -NoProfile -Command "'{`"ok`":true}'"
+Assert-Equal -Actual ($rawChanged -join "`n") -Expected '{"ok":true}' -Name 'Set-HumanizerView changes wrapper view to Raw'
+
+Set-HumanizerView -Name __humanizer_auto_test__ -View Tree -ExpandDepth 2 | Out-Null
+$pipelineChanged = & __humanizer_auto_test__ -NoProfile -Command "'{`"ok`":true}'" | To-HumanizerView Raw
+Assert-Equal -Actual ($pipelineChanged -join "`n") -Expected '{"ok":true}' -Name 'Wrapped command piped to To-HumanizerView Raw preserves raw JSON'
+
+$viewConfig = Get-HumanizerView -Name __humanizer_auto_test__
+Assert-Equal -Actual $viewConfig.View -Expected 'Tree' -Name 'Get-HumanizerView returns updated view'
+Assert-Equal -Actual $viewConfig.ExpandDepth -Expected 2 -Name 'Get-HumanizerView returns updated ExpandDepth'
 
 Remove-Item function:global:__humanizer_test__ -ErrorAction SilentlyContinue
 Remove-Item function:global:__humanizer_auto_test__ -ErrorAction SilentlyContinue
