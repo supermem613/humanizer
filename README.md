@@ -1,8 +1,8 @@
-# humanizer
+﻿# humanizer
 
 A drop-in PowerShell helper that automatically renders JSON output from any CLI without flags, pipes, or changes to the wrapped tool.
 
-When stdout is connected to your terminal, JSON is rendered as a colorized tree by default.
+When stdout is connected to your terminal, JSON is rendered with the colorized Auto view by default.
 When you pipe or redirect output, raw JSON passes through untouched so agents and scripts never break.
 
 ---
@@ -49,6 +49,7 @@ You can change a wrapper later without recreating it:
 ```powershell
 Set-HumanizerView az -View Raw
 Set-HumanizerView az -View PrettyJson
+Set-HumanizerView az -View Auto -ExpandDepth 2
 Set-HumanizerView az -View Tree -ExpandDepth 1
 Get-HumanizerView az
 ```
@@ -58,14 +59,14 @@ Get-HumanizerView az
 ## Usage
 
 ```powershell
-# Terminal: colorized tree-rendered JSON
+# Terminal: colorized Auto-rendered JSON
 kubectl get pods -o json
 
 # Pipe: raw JSON for agents and scripts
 kubectl get pods -o json | other-tool
 
 # Pipe through Humanizer explicitly
-kubectl get pods -o json | To-HumanizerView Tree
+kubectl get pods -o json | To-HumanizerView Auto
 
 # Redirect: raw JSON written to file
 kubectl get pods -o json > pods.json
@@ -77,9 +78,9 @@ No flags, extra pipes, or changes to the underlying tool.
 
 ## Examples
 
-### Default `Tree` view
+### Default `Auto` view
 
-`Tree` keeps nested JSON hierarchy visible while still staying compact.
+`Auto` keeps nested JSON hierarchy visible and renders arrays of records as compact tables under their tree node.
 
 ```powershell
 New-Humanizer forge
@@ -97,11 +98,30 @@ settings:
    └─ [1]: json
 ```
 
-Tree uses the same type-aware colors as the other rendered views. Keys are yellow, strings are green, numbers are cyan, booleans are magenta, and connectors plus null values are gray.
+For record arrays, Auto preserves the parent path and switches the repeated rows into a table:
+
+```powershell
+sd opened
+```
+
+```text
+ok: true
+command: opened
+data:
+   ┌───┬────────────┬─────────┬─────────────┬──────┬────────┐
+   │ # │ kind       │ cl      │ path        │ rev  │ action │
+   ├───┼────────────┼─────────┼─────────────┼──────┼────────┤
+   │ 0 │ changelist │ default │ ·          │ ·   │ ·     │
+   │ 1 │ file       │ default │ README.md   │ head │ edit   │
+   │ 2 │ file       │ default │ src/app.ps1 │ head │ edit   │
+   └───┴────────────┴─────────┴─────────────┴──────┴────────┘
+```
+
+Auto uses the same type-aware colors as the other rendered views. Keys are yellow, strings are green, numbers are cyan, booleans are magenta, and connectors, null values, and missing-field markers are gray.
 
 ### Auto and table views
 
-`Auto` keeps the older default behavior: structured JSON is rendered as tables when stdout is connected to a terminal.
+`Auto` is the default intelligent view: plain object hierarchy is tree-like, while arrays of records render as tables at the node where they appear.
 
 For common CLI envelopes such as `{ "ok": true, "command": "opened", "data": [...] }`, scalar metadata stays compact and `data` becomes the primary table:
 
@@ -155,6 +175,7 @@ Use `To-HumanizerView` when you want to choose the format inside a pipeline:
 
 ```powershell
 sd opened | To-HumanizerView Raw
+sd opened | To-HumanizerView Auto
 sd opened | To-HumanizerView Tree
 sd opened | To-HumanizerView Table
 sd opened | To-HumanizerView PrettyJson
@@ -175,13 +196,13 @@ sd opened | To-HumanizerView PrettyJson
 
 | View | Behavior |
 |---|---|
-| `Tree` | Default. Renders records and arrays as a compact Unicode tree, collapsing complex children at `-ExpandDepth` |
-| `Auto` | Uses `Table` for records and arrays, otherwise uses `PrettyJson` |
-| `Table` | Renders records and arrays as boxed tables, including nested tables up to `-ExpandDepth`, then truncates wide cells to fit the terminal |
+| `Auto` | Default. Renders object hierarchy as a compact tree and turns arrays of records into embedded tables |
+| `Tree` | Renders records and arrays as a compact Unicode tree, collapsing complex children at `-ExpandDepth` |
+| `Table` | Renders records and arrays as boxed tables, including nested tables and explicit `·` markers for missing fields up to `-ExpandDepth`, then truncates wide cells to fit the terminal |
 | `PrettyJson` | Re-indents JSON and colorizes keys, strings, numbers, booleans, null, and structural characters |
 | `Raw` | Always writes the original output |
 
-`Tree`, `Table`, `Auto`, and `PrettyJson` share the same type-aware colors: keys and headers are yellow, strings are green, numbers are cyan, booleans are magenta, null and borders are gray. Width calculations ignore ANSI escape sequences, so color does not cause table wrapping.
+`Auto`, `Tree`, `Table`, and `PrettyJson` share the same type-aware colors: keys and headers are yellow, strings are green, numbers are cyan, booleans are magenta, null, missing-field markers, and borders are gray. Width calculations ignore ANSI escape sequences, so color does not cause table wrapping.
 
 ---
 
@@ -194,6 +215,7 @@ Renders a JSON string according to the rules above.
 ```powershell
 $raw = & "C:\tools\agentdoor.exe" run
 Format-HumanizerJson $raw
+Format-HumanizerJson $raw -View Auto -ExpandDepth 2
 Format-HumanizerJson $raw -View Tree -ExpandDepth 2
 
 # Also accepts pipeline input
@@ -207,8 +229,10 @@ Renders piped JSON with an explicit view. Defaults to `Raw`, so adding it to a p
 ```powershell
 sd opened | To-HumanizerView
 sd opened | To-HumanizerView Raw
-sd opened | To-HumanizerView Tree -ExpandDepth 1
 sd opened | To-HumanizerView Auto
+sd opened | To-HumanizerView Tree -ExpandDepth 1
+sd opened | To-HumanizerView Table
+sd opened | To-HumanizerView PrettyJson
 ```
 
 ### `New-Humanizer`
@@ -223,8 +247,8 @@ New-Humanizer [-Name] <string> [[-Path] <string>] [-View <Raw|PrettyJson|Table|T
 |---|---|---|
 | `Name` | Yes | Name of the wrapper function to create (e.g. `"kubectl"`) |
 | `Path` | No | Full path to the executable. Resolved via `Get-Command` if omitted. |
-| `View` | No | Rendering mode for terminal output. Defaults to `Tree`. |
-| `ExpandDepth` | No | Maximum nested render depth for `Tree`, `Table`, and `Auto`. Defaults to `2`. |
+| `View` | No | Rendering mode for terminal output. Defaults to `Auto`. |
+| `ExpandDepth` | No | Maximum nested render depth for `Auto`, `Tree`, and `Table`. Defaults to `2`. |
 
 ### `Set-HumanizerView`
 
@@ -236,6 +260,7 @@ Set-HumanizerView [-Name] <string> -View <Raw|PrettyJson|Table|Tree|Auto> [-Expa
 
 ```powershell
 Set-HumanizerView sd -View Raw
+Set-HumanizerView sd -View Auto -ExpandDepth 2
 Set-HumanizerView sd -View Tree -ExpandDepth 1
 ```
 
@@ -257,7 +282,7 @@ Run the repeatable smoke tests from the repository root:
 .\test\run.ps1
 ```
 
-The tests verify raw redirected output, tree rendering, table rendering, wrapper registration, mutable view configuration, and exit-code propagation.
+The tests verify raw redirected output, Auto rendering, tree rendering, table rendering, wrapper registration, mutable view configuration, and exit-code propagation.
 
 ## License
 

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
 . (Join-Path $repo 'humanizer.ps1')
@@ -64,7 +64,7 @@ $json = '{"name":"demo","count":2}'
 $formatted = $json | Format-HumanizerJson
 Assert-Equal -Actual ($formatted -join "`n") -Expected $json -Name 'Format-HumanizerJson preserves redirected output'
 
-Assert-ParameterDefault -FunctionName 'Format-HumanizerJson' -ParameterName 'View' -Expected 'Tree'
+Assert-ParameterDefault -FunctionName 'Format-HumanizerJson' -ParameterName 'View' -Expected 'Auto'
 Assert-ParameterDefault -FunctionName 'To-HumanizerView' -ParameterName 'View' -Expected 'Raw'
 
 $raw = $json | Format-HumanizerJson -View Raw
@@ -80,6 +80,32 @@ $pipelineTree = $json | To-HumanizerView -View Tree | ForEach-Object { script:Re
 foreach ($expected in @('name: demo', 'count: 2')) {
     if (-not (($pipelineTree -join "`n").Contains($expected))) {
         throw "To-HumanizerView tree view failed. Expected output to contain '$expected'."
+    }
+}
+
+$autoJson = '{"ok":true,"data":[{"kind":"file","path":"README.md","rev":"head"},{"kind":"file","path":"humanizer.ps1","rev":"head"}],"meta":{"owner":"tools"}}'
+$autoValue = ConvertFrom-Json -InputObject $autoJson -Depth 100 -NoEnumerate
+$autoRows = script:ConvertTo-HumanizerAuto -Value $autoValue -ExpandDepth 2 -MaxWidth 120
+$plainAuto = ($autoRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('ok: true', 'data:', '┌───┬──────┬───────────────┬──────┐', '│ # │ kind │ path          │ rev  │', '│ 0 │ file │ README.md     │ head │', '│ 1 │ file │ humanizer.ps1 │ head │', 'meta:', '└─ owner: tools')) {
+    if (-not $plainAuto.Contains($expected)) {
+        throw "Auto view failed. Expected hybrid output to contain '$expected'."
+    }
+}
+
+$pipelineAuto = ($autoJson | To-HumanizerView Auto | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('data:', '│ # │ kind │ path          │ rev  │')) {
+    if (-not $pipelineAuto.Contains($expected)) {
+        throw "To-HumanizerView auto view failed. Expected output to contain '$expected'."
+    }
+}
+
+foreach ($functionName in @('Format-HumanizerJson', 'To-HumanizerView', 'New-Humanizer', 'Set-HumanizerView')) {
+    $command = Get-Command $functionName
+    $viewParameter = $command.Parameters['View']
+    $validateSet = @($viewParameter.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] } | Select-Object -First 1)
+    if ($validateSet.ValidValues -contains 'Smart') {
+        throw "$functionName failed. Smart should not be a public view."
     }
 }
 
@@ -122,6 +148,67 @@ foreach ($line in $typedRows) {
 $typedPlain = ($typedRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
 if ($typedPlain.Contains('│ 1 │')) {
     throw 'Table view failed. Single-item arrays rendered an extra blank row.'
+}
+
+$sparseJson = '[{"name":"api","state":"Running"},{"name":"worker"}]'
+$sparseRows = script:ConvertTo-HumanizerTable -Value (ConvertFrom-Json -InputObject $sparseJson -Depth 100 -NoEnumerate) -MaxWidth 100
+$sparsePlain = ($sparseRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+if (-not $sparsePlain.Contains('·')) {
+    throw 'Table view failed. Missing record fields did not render with an explicit marker.'
+}
+if ($sparsePlain.Contains('❎')) {
+    throw 'Table view failed. Missing record fields used an emoji marker.'
+}
+if (-not (($sparseRows -join "`n").Contains($script:HumanizerAnsiStyles.Missing))) {
+    throw 'Table view failed. Missing field marker was not styled.'
+}
+
+$nestedArrayJson = '{"name":"demo","groups":[{"name":"alpha","items":[{"id":1,"state":"open"},{"id":2}]},{"name":"beta","items":[{"id":3,"state":"done","owner":"me"}]}]}'
+$nestedArray = ConvertFrom-Json -InputObject $nestedArrayJson -Depth 100 -NoEnumerate
+$nestedTableRows = script:ConvertTo-HumanizerTable -Value $nestedArray -ExpandDepth 3 -MaxWidth 120
+$nestedTablePlain = ($nestedTableRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('groups', 'items', '│ # │ id │ state │', '·')) {
+    if (-not $nestedTablePlain.Contains($expected)) {
+        throw "Table view failed. Expected nested sub-table output to contain '$expected'."
+    }
+}
+foreach ($style in @($script:HumanizerAnsiStyles.Border, $script:HumanizerAnsiStyles.Header, $script:HumanizerAnsiStyles.Missing)) {
+    if (-not (($nestedTableRows -join "`n").Contains($style))) {
+        throw "Table view failed. Expected nested sub-table ANSI style '$style'."
+    }
+}
+
+$mixedShapeJson = '{"ok":true,"command":"opened","data":[{"kind":"changelist","cl":"default","description":"<created by soda>","fileCount":14},{"kind":"file","cl":"default","path":"src/commands/reconcileShared.ts","rev":"head","action":"edit","type":"text"},{"kind":"file","cl":"default","path":"src/commands/resolve.ts","rev":"head","action":"edit","type":"text"},{"kind":"changelist","cl":"syncdoc","description":"","fileCount":0}]}'
+$mixedShape = ConvertFrom-Json -InputObject $mixedShapeJson -Depth 100 -NoEnumerate
+$mixedShapeRows = script:ConvertTo-HumanizerAuto -Value $mixedShape -ExpandDepth 3 -MaxWidth 120
+$mixedShapePlain = ($mixedShapeRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('ok: true', 'command: opened', 'data:', '[0]:', 'kind: changelist', 'description: <created by soda>', '[1..2]:', 'kind │ cl', 'path', 'src/commands/reconcileShared.ts')) {
+    if (-not $mixedShapePlain.Contains($expected)) {
+        throw "Auto view failed. Expected mixed-shape array to segment dense runs and contain '$expected'."
+    }
+}
+if ($mixedShapePlain.Contains('│ # │ kind       │ cl') -and $mixedShapePlain.Contains('description') -and $mixedShapePlain.Contains('fileCount') -and $mixedShapePlain.Contains('path')) {
+    throw 'Auto view failed. Mixed-shape record array rendered as one sparse table.'
+}
+if ($mixedShapePlain.Contains('❎')) {
+    throw 'Auto view failed. Mixed-shape output used emoji missing markers.'
+}
+
+$diffLikeJson = '{"ok":true,"command":"diff","data":[{"kind":"file","path":"src/app.ts","format":"unified","diff":"@@ -1,2 +1,2 @@\n-old line\n+new line\n context line"}]}'
+$diffLike = ConvertFrom-Json -InputObject $diffLikeJson -Depth 100 -NoEnumerate
+$diffLikeRows = script:ConvertTo-HumanizerAuto -Value $diffLike -ExpandDepth 3 -MaxWidth 100
+$diffLikePlainRows = @($diffLikeRows | ForEach-Object { script:Remove-HumanizerStyle $_ })
+$diffLine = @($diffLikePlainRows | Where-Object { $_.Contains('diff:') })
+if ($diffLine.Count -ne 1) {
+    throw "Auto view failed. Multiline diff should render as one tree line, got $($diffLine.Count)."
+}
+if (-not $diffLine[0].Contains('(4 lines)')) {
+    throw 'Auto view failed. Multiline diff did not include a compact line-count summary.'
+}
+foreach ($unexpected in @('-old line', '+new line', 'context line')) {
+    if (($diffLikePlainRows | Where-Object { $_ -eq $unexpected }).Count -gt 0) {
+        throw "Auto view failed. Multiline diff leaked raw line '$unexpected'."
+    }
 }
 
 $shallowTable = (script:ConvertTo-HumanizerTable -Value $array -ExpandDepth 0) -join "`n"
@@ -193,38 +280,35 @@ if ($treeElapsed.TotalMilliseconds -gt 2000) {
     throw "Tree view failed. Rendering 500 nested records took $([int]$treeElapsed.TotalMilliseconds)ms."
 }
 
-$sdJson = '{"ok":true,"command":"opened","data":[{"kind":"changelist","cl":"default","description":"<created by soda>","fileCount":3},{"kind":"file","cl":"default","path":"README.md","rev":"head","action":"edit","type":"text"}]}'
-$sdEnvelope = ConvertFrom-Json -InputObject $sdJson -Depth 100 -NoEnumerate
-$autoTable = ((script:ConvertTo-HumanizerAutoTable -Value $sdEnvelope -ExpandDepth 2) | ForEach-Object {
-    script:Remove-HumanizerStyle $_
-}) -join "`n"
-foreach ($expected in @('ok: true', 'command: opened', 'kind', 'fileCount', 'README.md')) {
-    if (-not $autoTable.Contains($expected)) {
-        throw "Auto view failed. Expected unwrapped envelope output to contain '$expected'."
+$sdAutoJson = '{"ok":true,"command":"opened","data":[{"kind":"changelist","cl":"default","description":"<created by soda>","fileCount":3},{"kind":"file","cl":"default","path":"README.md","rev":"head","action":"edit","type":"text"}]}'
+$sdAutoValue = ConvertFrom-Json -InputObject $sdAutoJson -Depth 100 -NoEnumerate
+$sdAutoRows = script:ConvertTo-HumanizerAuto -Value $sdAutoValue -ExpandDepth 2 -MaxWidth 120
+$sdAutoPlain = ($sdAutoRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('ok: true', 'command: opened', 'data:', 'kind: changelist', 'fileCount: 3', 'path: README.md')) {
+    if (-not $sdAutoPlain.Contains($expected)) {
+        throw "Auto view failed. Expected sd-like tree output to contain '$expected'."
     }
 }
-
-if ($autoTable.Contains('Property') -or $autoTable.Contains('data')) {
-    throw 'Auto view failed. Envelope data rendered as a nested property table.'
+if ($sdAutoPlain.Contains('Property')) {
+    throw 'Auto view failed. Mixed-shape array rendered as a raw property table.'
 }
 
-$wideSdJson = '{"ok":true,"command":"opened","data":[{"kind":"changelist","cl":"default","description":"<created by soda. use sd change to add description>","fileCount":16},{"kind":"file","cl":"default","path":"test/e2e/scenarios/config.test.ts","rev":"head","action":"edit","type":"text"},{"kind":"file","cl":"default","path":"src/config/resolver.ts","rev":"head","action":"edit","type":"text"}]}'
-$wideSdEnvelope = ConvertFrom-Json -InputObject $wideSdJson -Depth 100 -NoEnumerate
-$narrowAutoTable = script:ConvertTo-HumanizerAutoTable -Value $wideSdEnvelope -ExpandDepth 2 -MaxWidth 100
-foreach ($line in $narrowAutoTable) {
+$wideDenseJson = '[{"kind":"file","path":"src/very/very/very/long/path/that/exceeds/budget.ts","rev":"head"}]'
+$wideDenseValue = ConvertFrom-Json -InputObject $wideDenseJson -Depth 100 -NoEnumerate
+$narrowDenseRows = script:ConvertTo-HumanizerAuto -Value $wideDenseValue -ExpandDepth 2 -MaxWidth 50
+foreach ($line in $narrowDenseRows) {
     $plainLine = script:Remove-HumanizerStyle $line
-    if ($plainLine.Length -gt 100) {
+    if ($plainLine.Length -gt 50) {
         throw "Auto view failed. Expected width-limited line, got $($plainLine.Length): $plainLine"
     }
 }
-
-if (-not ((($narrowAutoTable | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n").Contains('...'))) {
-    throw 'Auto view failed. Wide table did not truncate any cell.'
+if (-not (($narrowDenseRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n").Contains('...')) {
+    throw 'Auto view failed. Wide dense array did not truncate any cell.'
 }
 
 New-Humanizer __humanizer_test__ (Get-Command pwsh).Source
 
-Assert-ParameterDefault -FunctionName 'New-Humanizer' -ParameterName 'View' -Expected 'Tree'
+Assert-ParameterDefault -FunctionName 'New-Humanizer' -ParameterName 'View' -Expected 'Auto'
 
 & __humanizer_test__ -NoProfile -Command "'{`"ok`":true}'" | Out-Null
 Assert-Equal -Actual $global:LASTEXITCODE -Expected 0 -Name 'New-Humanizer preserves success exit code'
@@ -241,12 +325,12 @@ Set-HumanizerView -Name __humanizer_auto_test__ -View Raw -ExpandDepth 0 | Out-N
 $rawChanged = & __humanizer_auto_test__ -NoProfile -Command "'{`"ok`":true}'"
 Assert-Equal -Actual ($rawChanged -join "`n") -Expected '{"ok":true}' -Name 'Set-HumanizerView changes wrapper view to Raw'
 
-Set-HumanizerView -Name __humanizer_auto_test__ -View Tree -ExpandDepth 2 | Out-Null
+Set-HumanizerView -Name __humanizer_auto_test__ -View Auto -ExpandDepth 2 | Out-Null
 $pipelineChanged = & __humanizer_auto_test__ -NoProfile -Command "'{`"ok`":true}'" | To-HumanizerView Raw
 Assert-Equal -Actual ($pipelineChanged -join "`n") -Expected '{"ok":true}' -Name 'Wrapped command piped to To-HumanizerView Raw preserves raw JSON'
 
 $viewConfig = Get-HumanizerView -Name __humanizer_auto_test__
-Assert-Equal -Actual $viewConfig.View -Expected 'Tree' -Name 'Get-HumanizerView returns updated view'
+Assert-Equal -Actual $viewConfig.View -Expected 'Auto' -Name 'Get-HumanizerView returns updated view'
 Assert-Equal -Actual $viewConfig.ExpandDepth -Expected 2 -Name 'Get-HumanizerView returns updated ExpandDepth'
 
 Remove-Item function:global:__humanizer_test__ -ErrorAction SilentlyContinue

@@ -1,4 +1,4 @@
-# humanizer.ps1
+﻿# humanizer.ps1
 #
 # Drop this file anywhere and dot-source it from your $PROFILE:
 #
@@ -33,6 +33,7 @@ $script:HumanizerAnsiStyles = @{
     Header = "$([char]27)[33m"
     Json = "$([char]27)[36m"
     Key = "$([char]27)[33m"
+    Missing = "$([char]27)[90m"
     Null = "$([char]27)[90m"
     Number = "$([char]27)[36m"
     String = "$([char]27)[32m"
@@ -190,48 +191,49 @@ function script:ConvertTo-ColorJson {
         }
     }
 
-    function script:ConvertTo-HumanizerPrettyJson {
-        param(
-            [Parameter(Mandatory)]
-            [string]$Json
-        )
+}
 
-        $obj = $Json | ConvertFrom-Json -Depth 100 -ErrorAction Stop
-        $pretty = $obj | ConvertTo-Json -Depth 100 -ErrorAction Stop
-        $primitivePattern = '^(true|false|null|-?\d+(\.\d+)?([eE][+-]?\d+)?)(\s*)(,|\]|}|$)'
-        $lines = @()
-        foreach ($line in ($pretty -split "`n")) {
-            if ($line -match '^(\s*)"([^"]+)"(\s*:\s*)(.*)$') {
-                $indent = $Matches[1]
-                $key = $Matches[2]
-                $colon = $Matches[3]
-                $value = $Matches[4]
+function script:ConvertTo-HumanizerPrettyJson {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Json
+    )
 
-                $styledValue = $null
-                if ($value -match '^"') {
-                    $styledValue = script:ConvertTo-HumanizerStyledText -Text $value -Kind 'String'
-                } elseif ($value -match $primitivePattern) {
-                    $kind = 'Number'
-                    if ($value -match '^(true|false)') {
-                        $kind = 'Boolean'
-                    } elseif ($value -match '^null') {
-                        $kind = 'Null'
-                    }
+    $obj = $Json | ConvertFrom-Json -Depth 100 -ErrorAction Stop
+    $pretty = $obj | ConvertTo-Json -Depth 100 -ErrorAction Stop
+    $primitivePattern = '^(true|false|null|-?\d+(\.\d+)?([eE][+-]?\d+)?)(\s*)(,|\]|}|$)'
+    $lines = @()
+    foreach ($line in ($pretty -split "`n")) {
+        if ($line -match '^(\s*)"([^"]+)"(\s*:\s*)(.*)$') {
+            $indent = $Matches[1]
+            $key = $Matches[2]
+            $colon = $Matches[3]
+            $value = $Matches[4]
 
-                    $styledValue = script:ConvertTo-HumanizerStyledText -Text $value -Kind $kind
-                } else {
-                    $styledValue = script:ConvertTo-HumanizerStyledText -Text $value -Kind 'Border'
+            $styledValue = $null
+            if ($value -match '^"') {
+                $styledValue = script:ConvertTo-HumanizerStyledText -Text $value -Kind 'String'
+            } elseif ($value -match $primitivePattern) {
+                $kind = 'Number'
+                if ($value -match '^(true|false)') {
+                    $kind = 'Boolean'
+                } elseif ($value -match '^null') {
+                    $kind = 'Null'
                 }
 
-                $styledKey = script:ConvertTo-HumanizerStyledText -Text "`"$key`"" -Kind 'Key'
-                $lines += $indent + $styledKey + $colon + $styledValue
+                $styledValue = script:ConvertTo-HumanizerStyledText -Text $value -Kind $kind
             } else {
-                $lines += script:ConvertTo-HumanizerStyledText -Text $line -Kind 'Border'
+                $styledValue = script:ConvertTo-HumanizerStyledText -Text $value -Kind 'Border'
             }
-        }
 
-        return $lines
+            $styledKey = script:ConvertTo-HumanizerStyledText -Text "`"$key`"" -Kind 'Key'
+            $lines += $indent + $styledKey + $colon + $styledValue
+        } else {
+            $lines += script:ConvertTo-HumanizerStyledText -Text $line -Kind 'Border'
+        }
     }
+
+    return $lines
 }
 
 function script:Test-HumanizerRecord {
@@ -270,6 +272,24 @@ function script:ConvertTo-HumanizerScalar {
     }
 
     return [string]$Value
+}
+
+function script:ConvertTo-HumanizerTreeScalar {
+    param([object]$Value)
+
+    $text = script:ConvertTo-HumanizerScalar $Value
+    $normalized = $text -replace "`r`n?", "`n"
+    if (-not $normalized.Contains("`n")) {
+        return $text
+    }
+
+    $lines = @($normalized -split "`n")
+    $firstLine = $lines[0]
+    if ([string]::IsNullOrWhiteSpace($firstLine)) {
+        $firstLine = '<blank>'
+    }
+
+    return "$firstLine ... ($($lines.Count) lines)"
 }
 
 function script:Get-HumanizerComplexSummary {
@@ -315,8 +335,7 @@ function script:ConvertTo-HumanizerCell {
         }
 
         $nested = script:ConvertTo-HumanizerTable -Value $Value -Depth ($Depth + 1) -ExpandDepth $ExpandDepth
-        $plainNested = $nested | ForEach-Object { script:Remove-HumanizerStyle $_ }
-        return script:New-HumanizerCell -Text ($plainNested -join "`n") -Kind 'String'
+        return script:New-HumanizerCell -Text ($nested -join "`n") -Kind 'Nested'
     }
 
     return script:New-HumanizerCell -Text (script:ConvertTo-HumanizerScalar $Value) -Kind (script:Get-HumanizerScalarKind $Value)
@@ -350,41 +369,6 @@ function script:Test-HumanizerEnvelope {
 
     return $true
 }
-
-function script:ConvertTo-HumanizerAutoTable {
-    param(
-        [Parameter(Mandatory)]
-        [object]$Value,
-
-        [int]$ExpandDepth = 2,
-
-        [int]$MaxWidth = 0
-    )
-
-    if (-not (script:Test-HumanizerEnvelope $Value)) {
-        return script:ConvertTo-HumanizerTable -Value $Value -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth
-    }
-
-    $lines = @()
-    foreach ($property in $Value.PSObject.Properties) {
-        if ($property.Name -eq 'data') {
-            continue
-        }
-
-        $name = script:ConvertTo-HumanizerStyledText -Text $property.Name -Kind 'Key'
-        $styledValue = script:ConvertTo-HumanizerStyledText -Text (script:ConvertTo-HumanizerScalar $property.Value) -Kind (script:Get-HumanizerScalarKind $property.Value)
-        $lines += "${name}: $styledValue"
-    }
-
-    if ($lines.Count -gt 0) {
-        $lines += ''
-    }
-
-    $dataProperty = script:Get-HumanizerProperty -Value $Value -Name 'data'
-    $lines += script:ConvertTo-HumanizerTable -Value $dataProperty.Value -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth
-    return $lines
-}
-
 function script:Get-HumanizerListItems {
     param([object]$Value)
 
@@ -521,9 +505,19 @@ function script:New-HumanizerTableRow {
                 $line = $splitCells[$columnIndex][$lineIndex]
             }
 
-            $line = script:Limit-HumanizerCellLine -Value $line -Width $Widths[$columnIndex]
-            $styledLine = script:ConvertTo-HumanizerStyledText -Text $line -Kind $cellKinds[$columnIndex]
-            $parts += ' ' + $styledLine + (' ' * ($Widths[$columnIndex] - $line.Length)) + ' '
+            $plainLine = script:Remove-HumanizerStyle $line
+            if ($plainLine.Length -gt $Widths[$columnIndex]) {
+                $plainLine = script:Limit-HumanizerCellLine -Value $plainLine -Width $Widths[$columnIndex]
+                $line = $plainLine
+            }
+
+            if ($line -match ([regex]::Escape([string][char]27))) {
+                $styledLine = $line
+            } else {
+                $styledLine = script:ConvertTo-HumanizerStyledText -Text $line -Kind $cellKinds[$columnIndex]
+            }
+
+            $parts += ' ' + $styledLine + (' ' * ($Widths[$columnIndex] - $plainLine.Length)) + ' '
             $columnIndex++
         }
 
@@ -601,7 +595,8 @@ function script:ConvertTo-HumanizerListTable {
         [object]$Value,
         [int]$Depth,
         [int]$ExpandDepth,
-        [int]$MaxWidth = 0
+        [int]$MaxWidth = 0,
+        [int]$StartIndex = 0
     )
 
     $items = @(script:Get-HumanizerListItems $Value)
@@ -644,13 +639,13 @@ function script:ConvertTo-HumanizerListTable {
     $rows = @()
     $index = 0
     while ($index -lt $items.Count) {
-        $row = @([string]$index)
+        $row = @([string]($StartIndex + $index))
         foreach ($column in $columns) {
             $property = $items[$index].PSObject.Properties[$column]
             if ($property) {
                 $row += script:ConvertTo-HumanizerCell -Value $property.Value -Depth $Depth -ExpandDepth $ExpandDepth
             } else {
-                $row += ''
+                $row += script:New-HumanizerCell -Text '·' -Kind 'Missing'
             }
         }
 
@@ -768,7 +763,102 @@ function script:Add-HumanizerTreeLine {
     $Lines.Add($styledPrefix + $styledLabel + ': ' + $valueStart + $limitedValue + $reset)
 }
 
-function script:Add-HumanizerTreeEntries {
+function script:Test-HumanizerRecordList {
+    param([object]$Value)
+
+    if (-not (script:Test-HumanizerList $Value)) {
+        return $false
+    }
+
+    $items = @(script:Get-HumanizerListItems $Value)
+    if ($items.Count -eq 0) {
+        return $false
+    }
+
+    foreach ($item in $items) {
+        if (-not (script:Test-HumanizerRecord $item)) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function script:Test-HumanizerDenseRecordList {
+    param([object]$Value)
+
+    if (-not (script:Test-HumanizerRecordList $Value)) {
+        return $false
+    }
+
+    $items = @(script:Get-HumanizerListItems $Value)
+    $columns = @()
+    $presentCount = 0
+    foreach ($item in $items) {
+        foreach ($name in (script:Get-HumanizerRecordNames $item)) {
+            $presentCount++
+            if ($columns -notcontains $name) {
+                $columns += $name
+            }
+        }
+
+        foreach ($property in $item.PSObject.Properties) {
+            if ((script:Test-HumanizerScalar $property.Value) -and $property.Value -is [string]) {
+                $normalized = $property.Value -replace "`r`n?", "`n"
+                if ($normalized.Contains("`n")) {
+                    return $false
+                }
+            }
+        }
+    }
+
+    if ($columns.Count -eq 0) {
+        return $false
+    }
+
+    $totalCells = $items.Count * $columns.Count
+    return (($presentCount / $totalCells) -ge 0.75)
+}
+
+function script:Test-HumanizerTableFriendlyRecord {
+    param([object]$Value)
+
+    if (-not (script:Test-HumanizerRecord $Value)) {
+        return $false
+    }
+
+    foreach ($property in $Value.PSObject.Properties) {
+        if ((script:Test-HumanizerScalar $property.Value) -and $property.Value -is [string]) {
+            $normalized = $property.Value -replace "`r`n?", "`n"
+            if ($normalized.Contains("`n")) {
+                return $false
+            }
+        }
+    }
+
+    return $true
+}
+
+function script:Get-HumanizerRecordShapeKey {
+    param([object]$Value)
+
+    return ((script:Get-HumanizerRecordNames $Value) -join "`u{1f}")
+}
+
+function script:Add-HumanizerPrefixedBlock {
+    param(
+        [System.Collections.Generic.List[string]]$Lines,
+        [string]$Prefix,
+        [string[]]$Block
+    )
+
+    $styledPrefix = script:ConvertTo-HumanizerStyledText -Text $Prefix -Kind 'Border'
+    foreach ($line in $Block) {
+        $Lines.Add($styledPrefix + $line)
+    }
+}
+
+function script:Add-HumanizerAutoRecordListEntries {
     param(
         [Parameter(Mandatory)]
         [object]$Value,
@@ -780,10 +870,128 @@ function script:Add-HumanizerTreeEntries {
         [System.Collections.Generic.List[string]]$Lines
     )
 
+    $items = @(script:Get-HumanizerListItems $Value)
+    $segments = @()
+    $index = 0
+    while ($index -lt $items.Count) {
+        if (script:Test-HumanizerTableFriendlyRecord $items[$index]) {
+            $shape = script:Get-HumanizerRecordShapeKey $items[$index]
+            $start = $index
+            $group = @()
+            while ($index -lt $items.Count -and
+                (script:Test-HumanizerTableFriendlyRecord $items[$index]) -and
+                (script:Get-HumanizerRecordShapeKey $items[$index]) -eq $shape) {
+                $group += $items[$index]
+                $index++
+            }
+
+            if ($group.Count -ge 2) {
+                $segments += [pscustomobject]@{
+                    Kind = 'Table'
+                    Start = $start
+                    End = $index - 1
+                    Items = $group
+                }
+                continue
+            }
+
+            $segments += [pscustomobject]@{
+                Kind = 'Item'
+                Start = $start
+                Value = $group[0]
+            }
+            continue
+        }
+
+        $segments += [pscustomobject]@{
+            Kind = 'Item'
+            Start = $index
+            Value = $items[$index]
+        }
+        $index++
+    }
+
+    $borderStart = $script:HumanizerAnsiStyles.Border
+    $reset = $script:HumanizerAnsiReset
+    $segmentIndex = 0
+    while ($segmentIndex -lt $segments.Count) {
+        $segment = $segments[$segmentIndex]
+        $isLast = ($segmentIndex -eq ($segments.Count - 1))
+        $connector = ''
+        $childPrefix = $Prefix
+        if (-not $Root) {
+            if ($isLast) {
+                $connector = '└─ '
+                $childPrefix += '   '
+            } else {
+                $connector = '├─ '
+                $childPrefix += '│  '
+            }
+        }
+
+        if ($segment.Kind -eq 'Table') {
+            $label = "[$($segment.Start)..$($segment.End)]"
+            $styledPrefix = $borderStart + $Prefix + $connector + $reset
+            $styledLabel = $script:HumanizerAnsiStyles.Header + $label + $reset
+            $Lines.Add($styledPrefix + $styledLabel + ':')
+            $tableWidth = 0
+            if ($MaxWidth -gt 0) {
+                $tableWidth = [Math]::Max(40, $MaxWidth - $childPrefix.Length)
+            }
+
+            $table = script:ConvertTo-HumanizerListTable -Value $segment.Items -Depth ($Depth + 1) -ExpandDepth $ExpandDepth -MaxWidth $tableWidth -StartIndex $segment.Start
+            script:Add-HumanizerPrefixedBlock -Lines $Lines -Prefix $childPrefix -Block $table
+        } else {
+            $label = "[$($segment.Start)]"
+            $styledPrefix = $borderStart + $Prefix + $connector + $reset
+            $styledLabel = $script:HumanizerAnsiStyles.Header + $label + $reset
+            $entryValue = $segment.Value
+            if (script:Test-HumanizerScalar $entryValue) {
+                $plainValue = script:ConvertTo-HumanizerTreeScalar $entryValue
+                $Lines.Add($styledPrefix + $styledLabel + ': ' + $script:HumanizerAnsiStyles[(script:Get-HumanizerScalarKind $entryValue)] + $plainValue + $reset)
+            } else {
+                $Lines.Add($styledPrefix + $styledLabel + ':')
+                script:Add-HumanizerTreeLikeEntries -Value $entryValue -Depth ($Depth + 1) -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $childPrefix -Root $false -Lines $Lines -UseRecordTables $true
+            }
+        }
+
+        $segmentIndex++
+    }
+}
+
+function script:Add-HumanizerTreeLikeEntries {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Value,
+        [int]$Depth,
+        [int]$ExpandDepth,
+        [int]$MaxWidth,
+        [string]$Prefix,
+        [bool]$Root,
+        [System.Collections.Generic.List[string]]$Lines,
+        [bool]$UseRecordTables
+    )
+
+    if ($UseRecordTables -and (script:Test-HumanizerDenseRecordList $Value) -and $Depth -le $ExpandDepth) {
+        $tableWidth = 0
+        if ($MaxWidth -gt 0) {
+            $tableWidth = [Math]::Max(40, $MaxWidth - $Prefix.Length)
+        }
+
+        $table = script:ConvertTo-HumanizerListTable -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth -MaxWidth $tableWidth
+        script:Add-HumanizerPrefixedBlock -Lines $Lines -Prefix $Prefix -Block $table
+        return
+    }
+
+    if ($UseRecordTables -and (script:Test-HumanizerRecordList $Value) -and $Depth -le $ExpandDepth) {
+        script:Add-HumanizerAutoRecordListEntries -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $Prefix -Root $Root -Lines $Lines
+        return
+    }
+
     $isRecord = script:Test-HumanizerRecord $Value
     $isList = script:Test-HumanizerList $Value
     if (-not $isRecord -and -not $isList) {
-        $scalar = script:ConvertTo-HumanizerScalar $Value
+        $scalar = script:ConvertTo-HumanizerTreeScalar $Value
         $Lines.Add((script:ConvertTo-HumanizerStyledText -Text $scalar -Kind (script:Get-HumanizerScalarKind $Value)))
         return
     }
@@ -846,7 +1054,7 @@ function script:Add-HumanizerTreeEntries {
                 $plainValue = [string]$entryValue
                 $valueKind = 'Number'
             } else {
-                $plainValue = [string]$entryValue
+                $plainValue = script:ConvertTo-HumanizerTreeScalar $entryValue
                 $valueKind = 'String'
             }
 
@@ -888,9 +1096,21 @@ function script:Add-HumanizerTreeEntries {
             } else {
                 $Lines.Add($styledPrefix + $styledLabel + ': ' + $borderStart + $plainValue + $reset)
             }
+        } elseif ($UseRecordTables -and (script:Test-HumanizerDenseRecordList $entryValue)) {
+            $Lines.Add($styledPrefix + $styledLabel + ':')
+            $tableWidth = 0
+            if ($MaxWidth -gt 0) {
+                $tableWidth = [Math]::Max(40, $MaxWidth - $childPrefix.Length)
+            }
+
+            $table = script:ConvertTo-HumanizerListTable -Value $entryValue -Depth ($Depth + 1) -ExpandDepth $ExpandDepth -MaxWidth $tableWidth
+            script:Add-HumanizerPrefixedBlock -Lines $Lines -Prefix $childPrefix -Block $table
+        } elseif ($UseRecordTables -and (script:Test-HumanizerRecordList $entryValue)) {
+            $Lines.Add($styledPrefix + $styledLabel + ':')
+            script:Add-HumanizerAutoRecordListEntries -Value $entryValue -Depth ($Depth + 1) -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $childPrefix -Root $false -Lines $Lines
         } else {
             $Lines.Add($styledPrefix + $styledLabel + ':')
-            script:Add-HumanizerTreeEntries -Value $entryValue -Depth ($Depth + 1) -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $childPrefix -Root $false -Lines $Lines
+            script:Add-HumanizerTreeLikeEntries -Value $entryValue -Depth ($Depth + 1) -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $childPrefix -Root $false -Lines $Lines -UseRecordTables $UseRecordTables
         }
 
         $index++
@@ -910,7 +1130,24 @@ function script:ConvertTo-HumanizerTree {
     )
 
     $lines = [System.Collections.Generic.List[string]]::new()
-    script:Add-HumanizerTreeEntries -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix '' -Root $true -Lines $lines
+    script:Add-HumanizerTreeLikeEntries -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix '' -Root $true -Lines $lines -UseRecordTables $false
+    return $lines.ToArray()
+}
+
+function script:ConvertTo-HumanizerAuto {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Value,
+
+        [int]$Depth = 0,
+
+        [int]$ExpandDepth = 2,
+
+        [int]$MaxWidth = 0
+    )
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    script:Add-HumanizerTreeLikeEntries -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix '' -Root $true -Lines $lines -UseRecordTables $true
     return $lines.ToArray()
 }
 
@@ -981,7 +1218,7 @@ function Format-HumanizerJson {
         [string]$InputString,
 
         [ValidateSet('Raw', 'PrettyJson', 'Table', 'Tree', 'Auto')]
-        [string]$View = 'Tree',
+        [string]$View = 'Auto',
 
         [ValidateRange(0, 10)]
         [int]$ExpandDepth = 2
@@ -996,17 +1233,9 @@ function Format-HumanizerJson {
         try {
             $obj = ConvertFrom-Json -InputObject $InputString -Depth 100 -NoEnumerate -ErrorAction Stop
             $resolvedView = $View
-            if ($View -eq 'Auto') {
-                if ((script:Test-HumanizerRecord $obj) -or (script:Test-HumanizerList $obj)) {
-                    $resolvedView = 'Table'
-                } else {
-                    $resolvedView = 'PrettyJson'
-                }
-            }
-
             $maxWidth = script:Get-HumanizerMaxWidth
-            if ($View -eq 'Auto' -and $resolvedView -eq 'Table') {
-                foreach ($line in (script:ConvertTo-HumanizerAutoTable -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth)) {
+            if ($resolvedView -eq 'Auto') {
+                foreach ($line in (script:ConvertTo-HumanizerAuto -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth)) {
                     Write-Host $line
                 }
             } elseif ($resolvedView -eq 'Table') {
@@ -1075,17 +1304,9 @@ function To-HumanizerView {
         try {
             $obj = ConvertFrom-Json -InputObject $text -Depth 100 -NoEnumerate -ErrorAction Stop
             $resolvedView = $View
-            if ($View -eq 'Auto') {
-                if ((script:Test-HumanizerRecord $obj) -or (script:Test-HumanizerList $obj)) {
-                    $resolvedView = 'Table'
-                } else {
-                    $resolvedView = 'PrettyJson'
-                }
-            }
-
             $maxWidth = script:Get-HumanizerMaxWidth
-            if ($View -eq 'Auto' -and $resolvedView -eq 'Table') {
-                script:ConvertTo-HumanizerAutoTable -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth | Write-Output
+            if ($resolvedView -eq 'Auto') {
+                script:ConvertTo-HumanizerAuto -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth | Write-Output
             } elseif ($resolvedView -eq 'Table') {
                 script:ConvertTo-HumanizerTable -Value $obj -ExpandDepth $ExpandDepth -MaxWidth $maxWidth | Write-Output
             } elseif ($resolvedView -eq 'Tree') {
@@ -1124,7 +1345,7 @@ function New-Humanizer {
         [string]$Path,
 
         [ValidateSet('Raw', 'PrettyJson', 'Table', 'Tree', 'Auto')]
-        [string]$View = 'Tree',
+        [string]$View = 'Auto',
 
         [ValidateRange(0, 10)]
         [int]$ExpandDepth = 2
