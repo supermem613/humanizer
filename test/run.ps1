@@ -306,6 +306,22 @@ if (-not (($narrowDenseRows | ForEach-Object { script:Remove-HumanizerStyle $_ }
     throw 'Auto view failed. Wide dense array did not truncate any cell.'
 }
 
+$promptJson = '{"ok":true,"command":"prompt","data":[{"schemaVersion":1,"kind":"p4","branch":"main","stream":"default","head":"f00ba4","upstream":"origin/main","ahead":177,"behind":0,"clean":true,"changelists":0,"defaultOpened":0,"opened":0,"added":0,"changed":0,"deleted":0,"conflicts":0,"shelves":0,"cache":"hit"}]}'
+$promptValue = ConvertFrom-Json -InputObject $promptJson -Depth 100 -NoEnumerate
+$promptRows = script:ConvertTo-HumanizerAuto -Value $promptValue -ExpandDepth 2 -MaxWidth 80
+$promptPlain = ($promptRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('data:', '[0]:', 'schemaVersion: 1', 'cache: hit')) {
+    if (-not $promptPlain.Contains($expected)) {
+        throw "Auto view failed. Expected narrow prompt output to contain '$expected'."
+    }
+}
+foreach ($line in $promptRows) {
+    $plainLine = script:Remove-HumanizerStyle $line
+    if ($plainLine.Length -gt 80) {
+        throw "Auto view failed. Expected prompt line within width, got $($plainLine.Length): $plainLine"
+    }
+}
+
 New-Humanizer __humanizer_test__ (Get-Command pwsh).Source
 
 Assert-ParameterDefault -FunctionName 'New-Humanizer' -ParameterName 'View' -Expected 'Auto'

@@ -407,6 +407,47 @@ function script:Get-HumanizerTableWidth {
     return $sum + (3 * $Widths.Count) + 1
 }
 
+function script:Get-HumanizerRecordListTableMinimumWidth {
+    param([object]$Value)
+
+    $items = @(script:Get-HumanizerListItems $Value)
+    $columns = @()
+    foreach ($item in $items) {
+        foreach ($name in (script:Get-HumanizerRecordNames $item)) {
+            if ($columns -notcontains $name) {
+                $columns += $name
+            }
+        }
+    }
+
+    $headers = @('#') + $columns
+    $minimumWidths = @()
+    foreach ($header in $headers) {
+        $minimumWidths += [Math]::Min((script:Get-HumanizerValueWidth $header), 12)
+    }
+
+    return script:Get-HumanizerTableWidth $minimumWidths
+}
+
+function script:Test-HumanizerRecordListTableFits {
+    param(
+        [object]$Value,
+        [int]$MaxWidth,
+        [string]$Prefix
+    )
+
+    if ($MaxWidth -le 0) {
+        return $true
+    }
+
+    $availableWidth = $MaxWidth - $Prefix.Length
+    if ($availableWidth -le 0) {
+        return $false
+    }
+
+    return ((script:Get-HumanizerRecordListTableMinimumWidth $Value) -le $availableWidth)
+}
+
 function script:Limit-HumanizerTableWidths {
     param(
         [int[]]$Widths,
@@ -872,6 +913,11 @@ function script:Add-HumanizerAutoRecordListEntries {
 
     $items = @(script:Get-HumanizerListItems $Value)
     $segments = @()
+    $tablePrefix = $Prefix
+    if (-not $Root) {
+        $tablePrefix += '   '
+    }
+
     $index = 0
     while ($index -lt $items.Count) {
         if (script:Test-HumanizerTableFriendlyRecord $items[$index]) {
@@ -885,7 +931,7 @@ function script:Add-HumanizerAutoRecordListEntries {
                 $index++
             }
 
-            if ($group.Count -ge 2) {
+            if ($group.Count -ge 2 -and (script:Test-HumanizerRecordListTableFits -Value $group -MaxWidth $MaxWidth -Prefix $tablePrefix)) {
                 $segments += [pscustomobject]@{
                     Kind = 'Table'
                     Start = $start
@@ -895,10 +941,14 @@ function script:Add-HumanizerAutoRecordListEntries {
                 continue
             }
 
-            $segments += [pscustomobject]@{
-                Kind = 'Item'
-                Start = $start
-                Value = $group[0]
+            $groupIndex = 0
+            while ($groupIndex -lt $group.Count) {
+                $segments += [pscustomobject]@{
+                    Kind = 'Item'
+                    Start = $start + $groupIndex
+                    Value = $group[$groupIndex]
+                }
+                $groupIndex++
             }
             continue
         }
@@ -972,7 +1022,7 @@ function script:Add-HumanizerTreeLikeEntries {
         [bool]$UseRecordTables
     )
 
-    if ($UseRecordTables -and (script:Test-HumanizerDenseRecordList $Value) -and $Depth -le $ExpandDepth) {
+    if ($UseRecordTables -and (script:Test-HumanizerDenseRecordList $Value) -and $Depth -le $ExpandDepth -and (script:Test-HumanizerRecordListTableFits -Value $Value -MaxWidth $MaxWidth -Prefix $Prefix)) {
         $tableWidth = 0
         if ($MaxWidth -gt 0) {
             $tableWidth = [Math]::Max(40, $MaxWidth - $Prefix.Length)
@@ -1096,7 +1146,7 @@ function script:Add-HumanizerTreeLikeEntries {
             } else {
                 $Lines.Add($styledPrefix + $styledLabel + ': ' + $borderStart + $plainValue + $reset)
             }
-        } elseif ($UseRecordTables -and (script:Test-HumanizerDenseRecordList $entryValue)) {
+        } elseif ($UseRecordTables -and (script:Test-HumanizerDenseRecordList $entryValue) -and (script:Test-HumanizerRecordListTableFits -Value $entryValue -MaxWidth $MaxWidth -Prefix $childPrefix)) {
             $Lines.Add($styledPrefix + $styledLabel + ':')
             $tableWidth = 0
             if ($MaxWidth -gt 0) {
