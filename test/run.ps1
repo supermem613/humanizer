@@ -331,7 +331,10 @@ if ($scalarListPlain.Contains('[0]:')) {
     throw 'Auto view failed. Scalar-only record list was expanded into tree nodes instead of staying a table.'
 }
 
-$wideDenseJson = '[{"kind":"file","path":"src/very/very/very/long/path/that/exceeds/budget.ts","rev":"head"}]'
+# A multi-row dense record array that is too wide for the terminal stays a table
+# and truncates its widest cells. Multiple rows keep their alignment value, so
+# width pressure shrinks columns rather than expanding the list into tree nodes.
+$wideDenseJson = '[{"kind":"file","path":"src/very/very/very/long/path/that/exceeds/budget.ts","rev":"head"},{"kind":"file","path":"src/another/way/too/long/path/way/over/the/limit.ts","rev":"head"}]'
 $wideDenseValue = ConvertFrom-Json -InputObject $wideDenseJson -Depth 100 -NoEnumerate
 $narrowDenseRows = script:ConvertTo-HumanizerAuto -Value $wideDenseValue -ExpandDepth 2 -MaxWidth 50
 foreach ($line in $narrowDenseRows) {
@@ -340,8 +343,43 @@ foreach ($line in $narrowDenseRows) {
         throw "Auto view failed. Expected width-limited line, got $($plainLine.Length): $plainLine"
     }
 }
-if (-not (($narrowDenseRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n").Contains('...')) {
+$narrowDensePlain = ($narrowDenseRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+if (-not $narrowDensePlain.Contains('...')) {
     throw 'Auto view failed. Wide dense array did not truncate any cell.'
+}
+if (-not $narrowDensePlain.Contains('│')) {
+    throw 'Auto view failed. Multi-row dense array should stay a table when too wide.'
+}
+
+# Auto view never forces a single-row record list into a table that would
+# truncate. A one-row table has no sibling rows to align against, so a wide
+# single row (e.g. sd sidequest start) expands into a tree node where every
+# field keeps full width instead of losing the path and base to an ellipsis.
+$singleRowJson = '{"ok":true,"command":"sidequest","schemaVersion":2,"timingMs":1196,"data":[{"name":"greenify-ci","path":"C:\\Users\\marcusm\\repos\\.sd-sidequests\\soda\\greenify-ci","stream":"greenify-ci","originStream":"default","base":"1225379aa6bd499f49a5dda6bb48bd0d561e7edb","status":"started"}]}'
+$singleRowValue = ConvertFrom-Json -InputObject $singleRowJson -Depth 100 -NoEnumerate
+$singleRowPlain = (script:ConvertTo-HumanizerAuto -Value $singleRowValue -ExpandDepth 2 -MaxWidth 120 | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('data:', '[0]:', 'name: greenify-ci', 'path: C:\Users\marcusm\repos\.sd-sidequests\soda\greenify-ci', 'base: 1225379aa6bd499f49a5dda6bb48bd0d561e7edb', 'status: started')) {
+    if (-not $singleRowPlain.Contains($expected)) {
+        throw "Auto view failed. Wide single-row record list should expand to a full-width tree node containing '$expected'."
+    }
+}
+if ($singleRowPlain.Contains('│ # │ name')) {
+    throw 'Auto view failed. Wide single-row record list rendered as a truncating table instead of expanding.'
+}
+if ($singleRowPlain.Contains('...')) {
+    throw 'Auto view failed. Wide single-row record list truncated a value instead of expanding to full width.'
+}
+
+# A single-row record list whose table fits at full width stays a compact table,
+# since nothing is hidden. Only truncation pressure forces the expansion.
+$singleRowFitsJson = '{"data":[{"a":"1","b":"2","c":"3"}]}'
+$singleRowFitsValue = ConvertFrom-Json -InputObject $singleRowFitsJson -Depth 100 -NoEnumerate
+$singleRowFitsPlain = (script:ConvertTo-HumanizerAuto -Value $singleRowFitsValue -ExpandDepth 2 -MaxWidth 120 | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+if (-not $singleRowFitsPlain.Contains('│ # │ a │ b │ c │')) {
+    throw 'Auto view failed. A single-row record list that fits at full width should stay a compact table.'
+}
+if ($singleRowFitsPlain.Contains('[0]:')) {
+    throw 'Auto view failed. A single-row record list that fits should not expand into tree nodes.'
 }
 
 $promptJson = '{"ok":true,"command":"prompt","data":[{"schemaVersion":1,"kind":"p4","branch":"main","stream":"default","head":"f00ba4","upstream":"origin/main","ahead":177,"behind":0,"clean":true,"changelists":0,"defaultOpened":0,"opened":0,"added":0,"changed":0,"deleted":0,"conflicts":0,"shelves":0,"cache":"hit"}]}'

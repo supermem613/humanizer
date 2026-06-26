@@ -164,7 +164,7 @@ data:
          └───┴─────────────────────────────────────┴──────┴────────┴──────┘
 ```
 
-Scalar-only record arrays and longer lists stay compact as tables. The `Table` view always renders full boxed tables, including nested sub-tables inside cells.
+Scalar-only record arrays and longer lists stay compact as tables. A single-row record array is the exception: when its table would not fit the terminal, `Auto` expands it into a tree node so wide values such as full paths and hashes stay visible instead of being truncated to fit. A single row that fits at full width stays a compact table. The `Table` view always renders full boxed tables, including nested sub-tables inside cells.
 
 ### Pretty JSON
 

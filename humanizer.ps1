@@ -454,6 +454,67 @@ function script:Test-HumanizerRecordListTableFits {
     return ((script:Get-HumanizerRecordListTableMinimumWidth $Value) -le $availableWidth)
 }
 
+function script:Get-HumanizerRecordListTableNaturalWidth {
+    <#
+    .SYNOPSIS
+        Width the record-list table occupies with no column truncation. Rendering
+        through ConvertTo-HumanizerListTable at MaxWidth 0 skips
+        Limit-HumanizerTableWidths, so the columns keep their natural widths and
+        the widest rendered line is the table's full width.
+    #>
+    param(
+        [object]$Value,
+        [int]$Depth,
+        [int]$ExpandDepth
+    )
+
+    $table = script:ConvertTo-HumanizerListTable -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth -MaxWidth 0
+    $width = 0
+    foreach ($line in $table) {
+        $lineWidth = script:Get-HumanizerValueWidth $line
+        if ($lineWidth -gt $width) {
+            $width = $lineWidth
+        }
+    }
+
+    return $width
+}
+
+function script:Test-HumanizerSingleRowTableTruncates {
+    <#
+    .SYNOPSIS
+        Auto view guard. Returns $true when a record list has exactly one row and
+        its table cannot render at full width within the available space. A
+        one-row table has no sibling rows to align against, so fitting it to the
+        terminal only hides wide values such as full paths or hashes; the row
+        reads better as an expanded tree node. Multi-row lists, and one-row lists
+        that fit at natural width, return $false so they stay tabular.
+    #>
+    param(
+        [object]$Value,
+        [int]$MaxWidth,
+        [string]$Prefix,
+        [int]$Depth,
+        [int]$ExpandDepth
+    )
+
+    $items = @(script:Get-HumanizerListItems $Value)
+    if ($items.Count -ne 1) {
+        return $false
+    }
+
+    if ($MaxWidth -le 0) {
+        return $false
+    }
+
+    $availableWidth = $MaxWidth - $Prefix.Length
+    if ($availableWidth -le 0) {
+        return $true
+    }
+
+    return ((script:Get-HumanizerRecordListTableNaturalWidth -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth) -gt $availableWidth)
+}
+
 function script:Limit-HumanizerTableWidths {
     param(
         [int[]]$Widths,
@@ -1059,7 +1120,7 @@ function script:Add-HumanizerTreeLikeEntries {
         [bool]$UseRecordTables
     )
 
-    if ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $Value) -and (script:Test-HumanizerDenseRecordList $Value) -and $Depth -le $ExpandDepth -and (script:Test-HumanizerRecordListTableFits -Value $Value -MaxWidth $MaxWidth -Prefix $Prefix)) {
+    if ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $Value) -and (script:Test-HumanizerDenseRecordList $Value) -and $Depth -le $ExpandDepth -and (script:Test-HumanizerRecordListTableFits -Value $Value -MaxWidth $MaxWidth -Prefix $Prefix) -and -not (script:Test-HumanizerSingleRowTableTruncates -Value $Value -MaxWidth $MaxWidth -Prefix $Prefix -Depth $Depth -ExpandDepth $ExpandDepth)) {
         $tableWidth = 0
         if ($MaxWidth -gt 0) {
             $tableWidth = [Math]::Max(40, $MaxWidth - $Prefix.Length)
@@ -1203,7 +1264,7 @@ function script:Add-HumanizerTreeLikeEntries {
             } else {
                 $Lines.Add($styledPrefix + $styledLabel + ': ' + $borderStart + $plainValue + $reset)
             }
-        } elseif ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $entryValue) -and (script:Test-HumanizerDenseRecordList $entryValue) -and (script:Test-HumanizerRecordListTableFits -Value $entryValue -MaxWidth $MaxWidth -Prefix $childPrefix)) {
+        } elseif ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $entryValue) -and (script:Test-HumanizerDenseRecordList $entryValue) -and (script:Test-HumanizerRecordListTableFits -Value $entryValue -MaxWidth $MaxWidth -Prefix $childPrefix) -and -not (script:Test-HumanizerSingleRowTableTruncates -Value $entryValue -MaxWidth $MaxWidth -Prefix $childPrefix -Depth $childDepth -ExpandDepth $ExpandDepth)) {
             $Lines.Add($styledPrefix + $styledLabel + ':')
             $tableWidth = 0
             if ($MaxWidth -gt 0) {
