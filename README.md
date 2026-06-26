@@ -148,6 +148,24 @@ Nested records and arrays render inside table cells until `-ExpandDepth` is reac
 New-Humanizer forge -View Auto -ExpandDepth 0
 ```
 
+When a short record array (up to five rows) has rows that carry their own nested array or object, `Auto` expands those rows into tree nodes instead of one squeezed table, so the nested value keeps full terminal width:
+
+```text
+data:
+└─ changelists:
+   └─ [0]:
+      ├─ cl: default
+      ├─ description: <created by soda; use 'sd change' to add description>
+      └─ files:
+         ┌───┬─────────────────────────────────────┬──────┬────────┬──────┐
+         │ # │ path                                │ rev  │ action │ type │
+         ├───┼─────────────────────────────────────┼──────┼────────┼──────┤
+         │ 0 │ extensions/oh-my-posh/sd-status.ps1 │ head │ edit   │ text │
+         └───┴─────────────────────────────────────┴──────┴────────┴──────┘
+```
+
+Scalar-only record arrays and longer lists stay compact as tables. The `Table` view always renders full boxed tables, including nested sub-tables inside cells.
+
 ### Pretty JSON
 
 Use `PrettyJson` when the original JSON shape matters more than table browsing.

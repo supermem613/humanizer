@@ -293,6 +293,44 @@ if ($sdAutoPlain.Contains('Property')) {
     throw 'Auto view failed. Mixed-shape array rendered as a raw property table.'
 }
 
+$envelopeNestedJson = '{"ok":true,"command":"filelog","schemaVersion":2,"timingMs":914,"data":{"files":[{"path":"README.md","revisions":[{"cl":"abc123","date":"2026-06-25","description":"Docs: sync"}]}]}}'
+$envelopeNested = ConvertFrom-Json -InputObject $envelopeNestedJson -Depth 100 -NoEnumerate
+$envelopeNestedRows = script:ConvertTo-HumanizerAuto -Value $envelopeNested -ExpandDepth 2 -MaxWidth 120
+$envelopeNestedPlain = ($envelopeNestedRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('data:', 'files:', '│ # │ cl     │ date       │ description │')) {
+    if (-not $envelopeNestedPlain.Contains($expected)) {
+        throw "Auto view failed. Result envelope 'data' wrapper consumed the expand budget, so the nested array did not render as a sub-table. Expected '$expected'."
+    }
+}
+
+# Smart (Auto) view expands a short record list whose rows carry a nested array
+# into per-row tree nodes, so the nested array renders full width instead of
+# being squeezed into a narrow sub-table cell.
+$expandableJson = '{"ok":true,"command":"opened","schemaVersion":2,"timingMs":1213,"data":{"changelists":[{"cl":"default","description":"<created by soda>","files":[{"path":"a.ts","rev":"head","action":"edit","type":"text"},{"path":"b.ts","rev":"head","action":"edit","type":"text"}]}],"conflicts":[]}}'
+$expandable = ConvertFrom-Json -InputObject $expandableJson -Depth 100 -NoEnumerate
+$expandableRows = script:ConvertTo-HumanizerAuto -Value $expandable -ExpandDepth 2 -MaxWidth 120
+$expandablePlain = ($expandableRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('changelists:', '[0]:', 'cl: default', 'files:', '│ # │ path │ rev  │ action │ type │', '│ 0 │ a.ts │ head │ edit   │ text │')) {
+    if (-not $expandablePlain.Contains($expected)) {
+        throw "Auto view failed. Short nested record list did not expand into tree nodes with a full-width sub-table. Expected '$expected'."
+    }
+}
+if ($expandablePlain.Contains('│ # │ cl      │ description')) {
+    throw 'Auto view failed. Short nested record list was rendered as an outer table instead of expanded tree nodes.'
+}
+
+# Smart (Auto) view keeps a scalar-only record list compact as a table rather
+# than expanding it row by row.
+$scalarListJson = '{"data":{"files":[{"path":"a.ts","rev":"head"},{"path":"b.ts","rev":"head"}]}}'
+$scalarList = ConvertFrom-Json -InputObject $scalarListJson -Depth 100 -NoEnumerate
+$scalarListPlain = (script:ConvertTo-HumanizerAuto -Value $scalarList -ExpandDepth 2 -MaxWidth 120 | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+if (-not $scalarListPlain.Contains('│ # │ path │ rev  │')) {
+    throw 'Auto view failed. Scalar-only record list should stay a compact table.'
+}
+if ($scalarListPlain.Contains('[0]:')) {
+    throw 'Auto view failed. Scalar-only record list was expanded into tree nodes instead of staying a table.'
+}
+
 $wideDenseJson = '[{"kind":"file","path":"src/very/very/very/long/path/that/exceeds/budget.ts","rev":"head"}]'
 $wideDenseValue = ConvertFrom-Json -InputObject $wideDenseJson -Depth 100 -NoEnumerate
 $narrowDenseRows = script:ConvertTo-HumanizerAuto -Value $wideDenseValue -ExpandDepth 2 -MaxWidth 50

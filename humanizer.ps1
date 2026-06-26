@@ -40,6 +40,12 @@ $script:HumanizerAnsiStyles = @{
 }
 $script:HumanizerConfigurations = @{}
 
+# Smart (Auto) view only. A short record list whose rows carry a nested
+# array or object is rendered as expanded tree nodes instead of a table, so the
+# nested value keeps full terminal width instead of being squeezed into a narrow
+# sub-table cell. Lists longer than this stay tabular to avoid runaway height.
+$script:HumanizerExpandableRecordListMaxRows = 5
+
 function script:ConvertTo-HumanizerStyledText {
     param(
         [string]$Text,
@@ -861,6 +867,37 @@ function script:Test-HumanizerDenseRecordList {
     return (($presentCount / $totalCells) -ge 0.75)
 }
 
+function script:Test-HumanizerExpandableRecordList {
+    <#
+    .SYNOPSIS
+        Smart (Auto) view heuristic. Returns $true for a short record list whose
+        rows carry a nested array or object, signalling that the list reads
+        better as expanded tree nodes than as a table with a squeezed sub-table
+        cell. Scalar-only lists and long lists return $false so they stay
+        tabular.
+    #>
+    param([object]$Value)
+
+    if (-not (script:Test-HumanizerRecordList $Value)) {
+        return $false
+    }
+
+    $items = @(script:Get-HumanizerListItems $Value)
+    if ($items.Count -eq 0 -or $items.Count -gt $script:HumanizerExpandableRecordListMaxRows) {
+        return $false
+    }
+
+    foreach ($item in $items) {
+        foreach ($property in $item.PSObject.Properties) {
+            if (-not (script:Test-HumanizerScalar $property.Value)) {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
 function script:Test-HumanizerTableFriendlyRecord {
     param([object]$Value)
 
@@ -1022,7 +1059,7 @@ function script:Add-HumanizerTreeLikeEntries {
         [bool]$UseRecordTables
     )
 
-    if ($UseRecordTables -and (script:Test-HumanizerDenseRecordList $Value) -and $Depth -le $ExpandDepth -and (script:Test-HumanizerRecordListTableFits -Value $Value -MaxWidth $MaxWidth -Prefix $Prefix)) {
+    if ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $Value) -and (script:Test-HumanizerDenseRecordList $Value) -and $Depth -le $ExpandDepth -and (script:Test-HumanizerRecordListTableFits -Value $Value -MaxWidth $MaxWidth -Prefix $Prefix)) {
         $tableWidth = 0
         if ($MaxWidth -gt 0) {
             $tableWidth = [Math]::Max(40, $MaxWidth - $Prefix.Length)
@@ -1033,7 +1070,7 @@ function script:Add-HumanizerTreeLikeEntries {
         return
     }
 
-    if ($UseRecordTables -and (script:Test-HumanizerRecordList $Value) -and $Depth -le $ExpandDepth) {
+    if ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $Value) -and (script:Test-HumanizerRecordList $Value) -and $Depth -le $ExpandDepth) {
         script:Add-HumanizerAutoRecordListEntries -Value $Value -Depth $Depth -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $Prefix -Root $Root -Lines $Lines
         return
     }
@@ -1052,6 +1089,20 @@ function script:Add-HumanizerTreeLikeEntries {
     } else {
         $children = @(script:Get-HumanizerListItems $Value)
     }
+
+    # The standard CLI result envelope wraps the payload in a scalar-keyed
+    # record with a single complex 'data' key. That wrapper is transport, not a
+    # level of the data the reader is inspecting, so descending into 'data' must
+    # not spend the ExpandDepth budget. Without this, nested arrays in the
+    # payload collapse to compressed JSON one level too early.
+    $isEnvelope = $Root -and $isRecord -and (script:Test-HumanizerEnvelope $Value)
+
+    # When a short record list is expanded into per-row tree nodes (see
+    # Test-HumanizerExpandableRecordList), the [i] index is a structural wrapper
+    # whose only purpose is to surface the nested value. Spending the ExpandDepth
+    # budget on it would collapse that nested value to a summary, defeating the
+    # expansion, so the row index is treated as depth-neutral.
+    $isExpandedRecordList = $isList -and $UseRecordTables -and (script:Test-HumanizerExpandableRecordList $Value)
 
     $borderStart = $script:HumanizerAnsiStyles.Border
     $reset = $script:HumanizerAnsiReset
@@ -1083,6 +1134,12 @@ function script:Add-HumanizerTreeLikeEntries {
 
         $styledPrefix = $borderStart + $Prefix + $connector + $reset
         $styledLabel = $script:HumanizerAnsiStyles[$labelKind] + $label + $reset
+
+        $childDepth = $Depth + 1
+        if (($isEnvelope -and $label -eq 'data') -or $isExpandedRecordList) {
+            $childDepth = $Depth
+        }
+
         if (script:Test-HumanizerScalar $entryValue) {
             if ($null -eq $entryValue) {
                 $plainValue = 'null'
@@ -1146,21 +1203,21 @@ function script:Add-HumanizerTreeLikeEntries {
             } else {
                 $Lines.Add($styledPrefix + $styledLabel + ': ' + $borderStart + $plainValue + $reset)
             }
-        } elseif ($UseRecordTables -and (script:Test-HumanizerDenseRecordList $entryValue) -and (script:Test-HumanizerRecordListTableFits -Value $entryValue -MaxWidth $MaxWidth -Prefix $childPrefix)) {
+        } elseif ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $entryValue) -and (script:Test-HumanizerDenseRecordList $entryValue) -and (script:Test-HumanizerRecordListTableFits -Value $entryValue -MaxWidth $MaxWidth -Prefix $childPrefix)) {
             $Lines.Add($styledPrefix + $styledLabel + ':')
             $tableWidth = 0
             if ($MaxWidth -gt 0) {
                 $tableWidth = [Math]::Max(40, $MaxWidth - $childPrefix.Length)
             }
 
-            $table = script:ConvertTo-HumanizerListTable -Value $entryValue -Depth ($Depth + 1) -ExpandDepth $ExpandDepth -MaxWidth $tableWidth
+            $table = script:ConvertTo-HumanizerListTable -Value $entryValue -Depth $childDepth -ExpandDepth $ExpandDepth -MaxWidth $tableWidth
             script:Add-HumanizerPrefixedBlock -Lines $Lines -Prefix $childPrefix -Block $table
-        } elseif ($UseRecordTables -and (script:Test-HumanizerRecordList $entryValue)) {
+        } elseif ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $entryValue) -and (script:Test-HumanizerRecordList $entryValue)) {
             $Lines.Add($styledPrefix + $styledLabel + ':')
-            script:Add-HumanizerAutoRecordListEntries -Value $entryValue -Depth ($Depth + 1) -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $childPrefix -Root $false -Lines $Lines
+            script:Add-HumanizerAutoRecordListEntries -Value $entryValue -Depth $childDepth -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $childPrefix -Root $false -Lines $Lines
         } else {
             $Lines.Add($styledPrefix + $styledLabel + ':')
-            script:Add-HumanizerTreeLikeEntries -Value $entryValue -Depth ($Depth + 1) -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $childPrefix -Root $false -Lines $Lines -UseRecordTables $UseRecordTables
+            script:Add-HumanizerTreeLikeEntries -Value $entryValue -Depth $childDepth -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $childPrefix -Root $false -Lines $Lines -UseRecordTables $UseRecordTables
         }
 
         $index++
