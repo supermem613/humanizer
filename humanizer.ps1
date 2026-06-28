@@ -46,6 +46,12 @@ $script:HumanizerConfigurations = @{}
 # sub-table cell. Lists longer than this stay tabular to avoid runaway height.
 $script:HumanizerExpandableRecordListMaxRows = 5
 
+# Smart (Auto) view only. A record list whose table cannot render every column at
+# full width expands into per-row tree nodes so wide values such as paths and
+# hashes stay readable instead of being cropped to an ellipsis. Lists longer than
+# this keep the cropped table so their height stays bounded and rows stay aligned.
+$script:HumanizerTruncatingTableMaxRows = 10
+
 function script:ConvertTo-HumanizerStyledText {
     param(
         [string]$Text,
@@ -480,15 +486,19 @@ function script:Get-HumanizerRecordListTableNaturalWidth {
     return $width
 }
 
-function script:Test-HumanizerSingleRowTableTruncates {
+function script:Test-HumanizerRecordListTableTruncates {
     <#
     .SYNOPSIS
-        Auto view guard. Returns $true when a record list has exactly one row and
-        its table cannot render at full width within the available space. A
-        one-row table has no sibling rows to align against, so fitting it to the
-        terminal only hides wide values such as full paths or hashes; the row
-        reads better as an expanded tree node. Multi-row lists, and one-row lists
-        that fit at natural width, return $false so they stay tabular.
+        Auto view guard. Returns $true when a record list cannot render its table
+        at full width within the available space and the list is short enough that
+        expanding each row into a tree node reads better than cropping critical
+        columns. A single row has no sibling rows to align against. Even multi-row
+        lists lose value when wide columns such as full paths or hashes are cut to
+        an ellipsis, so up to HumanizerTruncatingTableMaxRows rows expand into tree
+        nodes where every field keeps full width. Lists longer than that cap keep
+        the table so their height stays bounded and rows stay aligned, accepting
+        cropped cells. Lists that fit at natural width return $false so they stay
+        tabular.
     #>
     param(
         [object]$Value,
@@ -499,7 +509,7 @@ function script:Test-HumanizerSingleRowTableTruncates {
     )
 
     $items = @(script:Get-HumanizerListItems $Value)
-    if ($items.Count -ne 1) {
+    if ($items.Count -eq 0 -or $items.Count -gt $script:HumanizerTruncatingTableMaxRows) {
         return $false
     }
 
@@ -1029,7 +1039,7 @@ function script:Add-HumanizerAutoRecordListEntries {
                 $index++
             }
 
-            if ($group.Count -ge 2 -and (script:Test-HumanizerRecordListTableFits -Value $group -MaxWidth $MaxWidth -Prefix $tablePrefix)) {
+            if ($group.Count -ge 2 -and (script:Test-HumanizerRecordListTableFits -Value $group -MaxWidth $MaxWidth -Prefix $tablePrefix) -and -not (script:Test-HumanizerRecordListTableTruncates -Value $group -MaxWidth $MaxWidth -Prefix $tablePrefix -Depth ($Depth + 1) -ExpandDepth $ExpandDepth)) {
                 $segments += [pscustomobject]@{
                     Kind = 'Table'
                     Start = $start
@@ -1120,7 +1130,7 @@ function script:Add-HumanizerTreeLikeEntries {
         [bool]$UseRecordTables
     )
 
-    if ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $Value) -and (script:Test-HumanizerDenseRecordList $Value) -and $Depth -le $ExpandDepth -and (script:Test-HumanizerRecordListTableFits -Value $Value -MaxWidth $MaxWidth -Prefix $Prefix) -and -not (script:Test-HumanizerSingleRowTableTruncates -Value $Value -MaxWidth $MaxWidth -Prefix $Prefix -Depth $Depth -ExpandDepth $ExpandDepth)) {
+    if ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $Value) -and (script:Test-HumanizerDenseRecordList $Value) -and $Depth -le $ExpandDepth -and (script:Test-HumanizerRecordListTableFits -Value $Value -MaxWidth $MaxWidth -Prefix $Prefix) -and -not (script:Test-HumanizerRecordListTableTruncates -Value $Value -MaxWidth $MaxWidth -Prefix $Prefix -Depth $Depth -ExpandDepth $ExpandDepth)) {
         $tableWidth = 0
         if ($MaxWidth -gt 0) {
             $tableWidth = [Math]::Max(40, $MaxWidth - $Prefix.Length)
@@ -1264,7 +1274,7 @@ function script:Add-HumanizerTreeLikeEntries {
             } else {
                 $Lines.Add($styledPrefix + $styledLabel + ': ' + $borderStart + $plainValue + $reset)
             }
-        } elseif ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $entryValue) -and (script:Test-HumanizerDenseRecordList $entryValue) -and (script:Test-HumanizerRecordListTableFits -Value $entryValue -MaxWidth $MaxWidth -Prefix $childPrefix) -and -not (script:Test-HumanizerSingleRowTableTruncates -Value $entryValue -MaxWidth $MaxWidth -Prefix $childPrefix -Depth $childDepth -ExpandDepth $ExpandDepth)) {
+        } elseif ($UseRecordTables -and -not (script:Test-HumanizerExpandableRecordList $entryValue) -and (script:Test-HumanizerDenseRecordList $entryValue) -and (script:Test-HumanizerRecordListTableFits -Value $entryValue -MaxWidth $MaxWidth -Prefix $childPrefix) -and -not (script:Test-HumanizerRecordListTableTruncates -Value $entryValue -MaxWidth $MaxWidth -Prefix $childPrefix -Depth $childDepth -ExpandDepth $ExpandDepth)) {
             $Lines.Add($styledPrefix + $styledLabel + ':')
             $tableWidth = 0
             if ($MaxWidth -gt 0) {

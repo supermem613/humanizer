@@ -331,24 +331,52 @@ if ($scalarListPlain.Contains('[0]:')) {
     throw 'Auto view failed. Scalar-only record list was expanded into tree nodes instead of staying a table.'
 }
 
-# A multi-row dense record array that is too wide for the terminal stays a table
-# and truncates its widest cells. Multiple rows keep their alignment value, so
-# width pressure shrinks columns rather than expanding the list into tree nodes.
-$wideDenseJson = '[{"kind":"file","path":"src/very/very/very/long/path/that/exceeds/budget.ts","rev":"head"},{"kind":"file","path":"src/another/way/too/long/path/way/over/the/limit.ts","rev":"head"}]'
+# A short multi-row dense record array that is too wide for the terminal drops the
+# table and expands each row into a full-width tree node, so wide values such as
+# paths stay readable instead of being cropped to an ellipsis. Up to
+# HumanizerTruncatingTableMaxRows rows expand this way.
+$wideDenseJson = '{"ok":true,"command":"sidequest","schemaVersion":2,"timingMs":447,"data":[{"name":"greenify-ci","path":"C:\\Users\\marcusm\\repos\\.sd-sidequests\\soda\\greenify-ci","stream":"greenify-ci","originStream":"default","state":"active","tip":"32d86e115d","originAhead":12},{"name":"sidequest-self","path":"C:\\Users\\marcusm\\repos\\.sd-sidequests\\soda\\sidequest-self","stream":"sidequest-self","originStream":"default","state":"orphaned","tip":"a1b2c3d4e5","originAhead":7}]}'
 $wideDenseValue = ConvertFrom-Json -InputObject $wideDenseJson -Depth 100 -NoEnumerate
-$narrowDenseRows = script:ConvertTo-HumanizerAuto -Value $wideDenseValue -ExpandDepth 2 -MaxWidth 50
-foreach ($line in $narrowDenseRows) {
+$wideDenseRows = script:ConvertTo-HumanizerAuto -Value $wideDenseValue -ExpandDepth 2 -MaxWidth 120
+$wideDensePlain = ($wideDenseRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($line in $wideDenseRows) {
+    $plainLine = script:Remove-HumanizerStyle $line
+    if ($plainLine.Length -gt 120) {
+        throw "Auto view failed. Expected width-limited line, got $($plainLine.Length): $plainLine"
+    }
+}
+foreach ($expected in @('[0]:', 'name: greenify-ci', 'path: C:\Users\marcusm\repos\.sd-sidequests\soda\greenify-ci', '[1]:', 'name: sidequest-self')) {
+    if (-not $wideDensePlain.Contains($expected)) {
+        throw "Auto view failed. Wide multi-row record list should expand to full-width tree nodes containing '$expected'."
+    }
+}
+if ($wideDensePlain.Contains('│ # │ name')) {
+    throw 'Auto view failed. Wide multi-row record list rendered as a truncating table instead of expanding.'
+}
+if ($wideDensePlain.Contains('...')) {
+    throw 'Auto view failed. Wide multi-row record list cropped a value instead of expanding to full width.'
+}
+
+# A dense record array longer than HumanizerTruncatingTableMaxRows that is too
+# wide for the terminal keeps the table and truncates its widest cells. Beyond the
+# cap the row alignment and bounded height outweigh full-width values, so width
+# pressure shrinks columns rather than expanding the list into tree nodes.
+$longDenseItems = 0..11 | ForEach-Object { '{"kind":"file","path":"src/very/very/very/long/path/that/exceeds/budget' + $_ + '.ts","rev":"head"}' }
+$longDenseJson = '[' + ($longDenseItems -join ',') + ']'
+$longDenseValue = ConvertFrom-Json -InputObject $longDenseJson -Depth 100 -NoEnumerate
+$longDenseRows = script:ConvertTo-HumanizerAuto -Value $longDenseValue -ExpandDepth 2 -MaxWidth 50
+foreach ($line in $longDenseRows) {
     $plainLine = script:Remove-HumanizerStyle $line
     if ($plainLine.Length -gt 50) {
         throw "Auto view failed. Expected width-limited line, got $($plainLine.Length): $plainLine"
     }
 }
-$narrowDensePlain = ($narrowDenseRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
-if (-not $narrowDensePlain.Contains('...')) {
-    throw 'Auto view failed. Wide dense array did not truncate any cell.'
+$longDensePlain = ($longDenseRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+if (-not $longDensePlain.Contains('...')) {
+    throw 'Auto view failed. Long dense array beyond the cap did not truncate any cell.'
 }
-if (-not $narrowDensePlain.Contains('│')) {
-    throw 'Auto view failed. Multi-row dense array should stay a table when too wide.'
+if (-not $longDensePlain.Contains('│')) {
+    throw 'Auto view failed. Long dense array beyond the cap should stay a table when too wide.'
 }
 
 # Auto view never forces a single-row record list into a table that would
