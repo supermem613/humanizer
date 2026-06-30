@@ -426,6 +426,74 @@ foreach ($line in $promptRows) {
     }
 }
 
+$stderrContractWrapperName = '__humanizer_stderr_contract__'
+$stderrContractCommandName = if (Get-Command node -ErrorAction SilentlyContinue) { 'node' } else { 'pwsh' }
+$stderrContractCommandPath = (Get-Command $stderrContractCommandName).Source
+$stderrContractExpectedStdoutJson = '{"ok":true}'
+$stderrContractExpectedStderrText = 'stderr-bytes'
+$stderrContractExitCode = 7
+$directStdoutFile = Join-Path $repo '.humanizer-stderr-contract-direct-stdout.tmp'
+$directStderrFile = Join-Path $repo '.humanizer-stderr-contract-direct-stderr.tmp'
+$wrappedStdoutFile = Join-Path $repo '.humanizer-stderr-contract-wrapped-stdout.tmp'
+$wrappedStderrFile = Join-Path $repo '.humanizer-stderr-contract-wrapped-stderr.tmp'
+$pipedStderrFile = Join-Path $repo '.humanizer-stderr-contract-piped-stderr.tmp'
+try {
+    New-Humanizer $stderrContractWrapperName $stderrContractCommandPath -View Auto
+    Assert-Equal -Actual (Get-Command $stderrContractWrapperName).CommandType.ToString() -Expected 'Function' -Name 'New-Humanizer stderr contract uses wrapper function'
+
+    if ($stderrContractCommandName -eq 'node') {
+        $stderrContractCommandArgs = @('-e', "process.stdout.write('$stderrContractExpectedStdoutJson'); process.stderr.write('$stderrContractExpectedStderrText'); process.exit($stderrContractExitCode)")
+    } else {
+        $stderrContractCommandArgs = @('-NoProfile', '-Command', @"
+$bytes = [System.Text.Encoding]::UTF8.GetBytes('$stderrContractExpectedStdoutJson')
+[Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)
+$err = [System.Text.Encoding]::UTF8.GetBytes('$stderrContractExpectedStderrText')
+[Console]::OpenStandardError().Write($err, 0, $err.Length)
+exit $stderrContractExitCode
+"@)
+    }
+
+    & $stderrContractCommandPath @stderrContractCommandArgs 1> $directStdoutFile 2> $directStderrFile
+    $directExitCode = $global:LASTEXITCODE
+    $wrappedStdoutOutput = & $stderrContractWrapperName @stderrContractCommandArgs 2> $wrappedStderrFile | To-HumanizerView Raw
+    $wrappedExitCode = $global:LASTEXITCODE
+    $wrappedStdoutBytes = [System.Text.Encoding]::UTF8.GetBytes(($wrappedStdoutOutput -join "`n"))
+    [System.IO.File]::WriteAllBytes($wrappedStdoutFile, $wrappedStdoutBytes)
+
+    $expectedStdoutBytes = [System.Text.Encoding]::UTF8.GetBytes($stderrContractExpectedStdoutJson)
+
+    $directStdoutBytes = [System.IO.File]::ReadAllBytes($directStdoutFile)
+    $wrappedStdoutBytes = [System.IO.File]::ReadAllBytes($wrappedStdoutFile)
+    $directStderrBytes = [System.IO.File]::ReadAllBytes($directStderrFile)
+    $wrappedStderrBytes = [System.IO.File]::ReadAllBytes($wrappedStderrFile)
+    $directStderrText = [System.Text.Encoding]::UTF8.GetString($directStderrBytes).TrimEnd("`r", "`n")
+    $wrappedStderrText = [System.Text.Encoding]::UTF8.GetString($wrappedStderrBytes).TrimEnd("`r", "`n")
+
+    Assert-Equal -Actual $directExitCode -Expected $stderrContractExitCode -Name 'New-Humanizer preserves native exit codes for direct commands'
+    Assert-Equal -Actual $wrappedExitCode -Expected $stderrContractExitCode -Name 'New-Humanizer preserves native exit codes for wrapped commands'
+    Assert-Equal -Actual $wrappedExitCode -Expected $directExitCode -Name 'New-Humanizer preserves native exit codes across direct and wrapped commands'
+    Assert-Equal -Actual ($directStdoutBytes -join ',') -Expected ($expectedStdoutBytes -join ',') -Name 'Direct native stdout bytes match expected JSON bytes'
+    Assert-Equal -Actual ($wrappedStdoutBytes -join ',') -Expected ($expectedStdoutBytes -join ',') -Name 'Wrapped native stdout bytes match expected JSON bytes'
+    Assert-Equal -Actual ($wrappedStdoutBytes -join ',') -Expected ($directStdoutBytes -join ',') -Name 'Wrapped stdout bytes match direct native stdout bytes'
+    Assert-Equal -Actual $directStderrText -Expected $stderrContractExpectedStderrText -Name 'Direct native stderr text matches expected stderr bytes'
+    Assert-Equal -Actual $wrappedStderrText -Expected $stderrContractExpectedStderrText -Name 'Wrapped native stderr text matches expected stderr bytes'
+    Assert-Equal -Actual ($wrappedStderrBytes -join ',') -Expected ($directStderrBytes -join ',') -Name 'Wrapped stderr bytes match direct native stderr bytes'
+
+    $pipedStdout = & $stderrContractWrapperName @stderrContractCommandArgs 2> $pipedStderrFile | To-HumanizerView Raw
+    Assert-Equal -Actual ($pipedStdout -join "`n") -Expected $stderrContractExpectedStdoutJson -Name 'New-Humanizer Raw view preserves stdout JSON when piped'
+    $pipedStderrBytes = [System.IO.File]::ReadAllBytes($pipedStderrFile)
+    $pipedStderrText = [System.Text.Encoding]::UTF8.GetString($pipedStderrBytes).TrimEnd("`r", "`n")
+    Assert-Equal -Actual $pipedStderrText -Expected $stderrContractExpectedStderrText -Name 'New-Humanizer Raw view preserves stderr text when piped'
+} finally {
+    Remove-Item $directStdoutFile -ErrorAction SilentlyContinue
+    Remove-Item $directStderrFile -ErrorAction SilentlyContinue
+    Remove-Item $wrappedStdoutFile -ErrorAction SilentlyContinue
+    Remove-Item $wrappedStderrFile -ErrorAction SilentlyContinue
+    Remove-Item $pipedStderrFile -ErrorAction SilentlyContinue
+    Remove-Item "Alias:\$stderrContractWrapperName" -Force -ErrorAction SilentlyContinue
+    Remove-Item "function:global:$stderrContractWrapperName" -ErrorAction SilentlyContinue
+}
+
 New-Humanizer __humanizer_test__ (Get-Command pwsh).Source
 
 Assert-ParameterDefault -FunctionName 'New-Humanizer' -ParameterName 'View' -Expected 'Auto'

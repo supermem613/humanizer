@@ -5,6 +5,10 @@ A drop-in PowerShell helper that automatically renders JSON output from any CLI 
 When stdout is connected to your terminal, JSON is rendered with the colorized Auto view by default.
 When you pipe or redirect output, raw JSON passes through untouched so agents and scripts never break.
 
+## Output contract
+
+Humanizer formats stdout only. Stderr passes through untouched, so progress and effects remain under the producer's control. Pipes and redirects stay raw for stdout; live stdout streaming is not supported because Humanizer captures stdout before rendering. For CLIs such as soda, emit JSON on stdout and progress/effects on stderr; on a TTY, stderr may use a CR-redrawn single line, while non-TTY stderr should use plain newline-delimited phase-transition lines.
+
 ---
 
 ## Quick start
