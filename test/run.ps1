@@ -319,6 +319,22 @@ if ($expandablePlain.Contains('│ # │ cl      │ description')) {
     throw 'Auto view failed. Short nested record list was rendered as an outer table instead of expanded tree nodes.'
 }
 
+# When a shelf list is too wide for the terminal, Auto view falls back to
+# per-shelf tree nodes. The shelf index must not spend the depth budget before
+# the nested files list renders.
+$multiShelfJson = '{"ok":true,"command":"opened","schemaVersion":2,"timingMs":860,"data":{"changelists":[{"cl":"default","description":"<created by soda>","files":[{"path":"a.ts","rev":"head","action":"edit","type":"text"},{"path":"b.ts","rev":"head","action":"edit","type":"text"},{"path":"c.ts","rev":"head","action":"edit","type":"text"},{"path":"d.ts","rev":"head","action":"edit","type":"text"},{"path":"e.ts","rev":"head","action":"edit","type":"text"},{"path":"f.ts","rev":"head","action":"edit","type":"text"}]},{"cl":"undo-local-serial-runner","description":"","files":[]},{"cl":"red-testrepo-fork-tests","description":"","files":[]},{"cl":"green-testrepo-fork","description":"","files":[]},{"cl":"red-testrepo-snapshot","description":"","files":[]},{"cl":"green-testrepo-snapshot","description":"","files":[]},{"cl":"speed-testrepo-snapshot","description":"","files":[]}],"conflicts":[]}}'
+$multiShelfValue = ConvertFrom-Json -InputObject $multiShelfJson -Depth 100 -NoEnumerate
+$multiShelfRows = script:ConvertTo-HumanizerAuto -Value $multiShelfValue -ExpandDepth 2 -MaxWidth 80
+$multiShelfPlain = ($multiShelfRows | ForEach-Object { script:Remove-HumanizerStyle $_ }) -join "`n"
+foreach ($expected in @('changelists:', '[0]:', 'cl: default', 'files:', '│ 0 │ a.ts │ head │ edit   │ text │')) {
+    if (-not $multiShelfPlain.Contains($expected)) {
+        throw "Auto view failed. Multi-shelf output collapsed nested files instead of listing '$expected'."
+    }
+}
+if ($multiShelfPlain.Contains('files: [6 items]')) {
+    throw 'Auto view failed. Multi-shelf files collapsed to an item count instead of listing file rows.'
+}
+
 # Smart (Auto) view keeps a scalar-only record list compact as a table rather
 # than expanding it row by row.
 $scalarListJson = '{"data":{"files":[{"path":"a.ts","rev":"head"},{"path":"b.ts","rev":"head"}]}}'

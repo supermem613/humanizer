@@ -1109,7 +1109,9 @@ function script:Add-HumanizerAutoRecordListEntries {
                 $Lines.Add($styledPrefix + $styledLabel + ': ' + $script:HumanizerAnsiStyles[(script:Get-HumanizerScalarKind $entryValue)] + $plainValue + $reset)
             } else {
                 $Lines.Add($styledPrefix + $styledLabel + ':')
-                script:Add-HumanizerTreeLikeEntries -Value $entryValue -Depth ($Depth + 1) -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $childPrefix -Root $false -Lines $Lines -UseRecordTables $true
+                # The item index is a structural wrapper. Preserve the depth
+                # budget for nested fields that forced this row out of a table.
+                script:Add-HumanizerTreeLikeEntries -Value $entryValue -Depth $Depth -ExpandDepth $ExpandDepth -MaxWidth $MaxWidth -Prefix $childPrefix -Root $false -Lines $Lines -UseRecordTables $true
             }
         }
 
